@@ -42,30 +42,15 @@ fi
 # Uncomment and change below to set a custom android package id,
 # e.g. to allow simultaneous mainnet and testnet installs of the apk.
 # defaults:
-<<<<<<< HEAD
 #   export APP_PACKAGE_NAME=Electrin
 #   export APP_PACKAGE_DOMAIN=org.electrin
-# FIXME: changing "APP_PACKAGE_NAME" seems to require a clean rebuild of ".buildozer/",
-#        to avoid that, maybe change "APP_PACKAGE_DOMAIN" instead.
-# So, in particular, to build a testnet apk, simply uncomment:
-#export APP_PACKAGE_DOMAIN=org.electrin.testnet
-=======
-#
-#   export APP_PACKAGE_NAME=Electrum
-#   export APP_PACKAGE_DOMAIN=org.electrum
 #
 # FIXME: changing "APP_PACKAGE_NAME" seems to require a clean rebuild of ".buildozer/".
 #        However, even with a clean build, the build appears to break in the final stages (~4.7.0).
 #        To avoid these issues; only change "APP_PACKAGE_DOMAIN" instead.
 #
-# So, in particular, to build testnet APKs, simply uncomment one of the following at a time (per-build):
-#
-# Testnet3
-#export APP_PACKAGE_DOMAIN=org.electrum.testnet
-#
-# Testnet4
-#export APP_PACKAGE_DOMAIN=org.electrum.testnet4
->>>>>>> 12dfa15e3 (contrib: android: make_apk.sh: add/update testnet comments)
+# So, in particular, to build a testnet APK, simply uncomment:
+#export APP_PACKAGE_DOMAIN=org.electrin.testnet
 
 if [ $CI ]; then
     # override log level specified in buildozer.spec to "debug":

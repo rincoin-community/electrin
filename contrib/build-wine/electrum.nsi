@@ -228,14 +228,8 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${PRODUCT_NAME}\*.*"
   RMDir  "$SMPROGRAMS\${PRODUCT_NAME}"
 
-<<<<<<< HEAD
   DeleteRegKey HKCU "Software\Classes\rincoin"
-=======
-  DeleteRegKey HKCU "Software\Classes\bitcoin"
   DeleteRegKey HKCU "Software\Classes\lightning"
-  DeleteRegKey HKCU "Software\Classes\lnurlp"
-  DeleteRegKey HKCU "Software\Classes\lnurlw"
->>>>>>> 78135ac8b (windows: delete lightning URI hooks on uninstall)
   DeleteRegKey HKCU "Software\${PRODUCT_NAME}"
   DeleteRegKey HKCU "${PRODUCT_UNINST_KEY}"
 SectionEnd
