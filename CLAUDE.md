@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Electrin is a Rincoin wallet forked from [Electrum](https://github.com/spesmilo/electrum) (currently on the
-`rincoin-bootstrap` branch, merge-base `upstream/master` ≈ Electrum 4.7.0+69 commits). It speaks the
+Electrin is a Rincoin wallet forked from [Electrum](https://github.com/spesmilo/electrum) (main branch
+`master`, which contains the historical `rincoin-bootstrap` branch plus later upstream sync passes; see
+`UPSTREAM_SYNC.md`). The repository lives at `rincoin-community/electrin`. It speaks the
 Electrum protocol (v1.4–1.6) to [Fulcrum-rin](https://github.com/takologi/Fulcrum-rin) servers — it does not
 run a full Rincoin node. See `README.md` for user-facing status, install instructions, and the maintained
 `TODO [TAG]` ledger (cross-referenced to source comments).
@@ -40,14 +41,12 @@ Electrin must stay wire-compatible with Rincoin's other wallets, all outside thi
   has two entries: `RIN` (`m/44'/9555'`, legacy P2PKH) and `RIN-segwit` (`m/84'/9555'`, native segwit),
   both `pubtype 60`/`p2shtype 122`/`wiftype 188`/`bech32_hrp "rin"`/`segwit: true`. A single key is
   legitimately spendable as both `R…` and `rin1…` addresses.
-- **`~/kdf-analysis-2022`** — original Komodo DeFi Framework source. Source of truth for KDF's actual
-  derivation behavior (e.g. `mm2src/crypto/src/privkey.rs`'s iguana-legacy vs. BIP39-HD seed handling —
-  they use *different* string-normalization rules, which matters for any Electrin code that imports a KDF
-  seed/passphrase).
-- **`~/kdf-reloaded-public`** — a maintained KDF fork. Cross-check it whenever consulting
-  `kdf-analysis-2022`, per standing instruction — it should be wire-compatible; flag immediately if it
-  ever diverges. As of this writing, `privkey.rs`'s iguana derivation is byte-for-byte identical between
-  the two.
+- **`~/kdf-reloaded-public`** — KDF Reloaded, the reference for Komodo DeFi Framework behavior used here
+  (e.g. `mm2src/crypto/src/privkey.rs`'s iguana-legacy vs. BIP39-HD seed handling — they use *different*
+  string-normalization rules, which matters for any Electrin code that imports a KDF seed/passphrase).
+  Do not read the upstream Komodo DeFi Framework source (`~/kdf-analysis-2022`,
+  `GLEECBTC/komodo-defi-framework`) directly; its license does not allow reuse, and questions about its
+  behavior go through the process described in `~/kdf-reloaded-public/AGENTS.md`.
 - **`~/Fulcrum-rin`** — the Electrum-protocol server Electrin actually talks to. Already supports protocol
   1.6.0, matching `PROTOCOL_VERSION_MAX` here.
 
@@ -105,12 +104,17 @@ Tests: `pytest tests -v` (see `.cirrus.yml` for the exact CI invocation, incl. c
 
 ## Ongoing work / where to pick this up
 
-- **Upstream sync state**: `origin/master` (not `rincoin-bootstrap`) carries
+- **Height-840,000 transition** (Rincoin Community Core 1.2.0): from that height every ECDSA signature
+  carries `SIGHASH_FORKID` (fork ID 840, BIP143 digest for every input). Specification:
+  `rincoin-community/consensus-840k`, `technology/consensus-transition.md` §5. In this repo:
+  `transaction.py` (`sighash_forkid_active()`), `chain_milestones.py` (pre-transition signing prompt),
+  `tests/test_rincoin_forkid.py`. Hardware wallets are disabled because no device supports the fork ID.
+- **Upstream sync state**: `UPSTREAM_SYNC.md` is the living ledger; `master` also carries
   `UPSTREAM_MERGE_TRIAGE_RINCOIN_BOOTSTRAP.md`, a 351-commit triage of `rincoin-bootstrap..upstream/master`.
-  As of the most recent audit, ~83 of those are already cherry-picked onto `rincoin-bootstrap` (including
+  As of that audit, ~83 of those were already cherry-picked onto `rincoin-bootstrap` (including
   every non-LN "mandatory" security fix), matched by commit-subject heuristic, not content diff — treat
   that match as a starting point, not gospel. **Cherry-picking isolated upstream commits here is more
-  conflict-prone than it looks even for "simple" fixes**, because `rincoin-bootstrap` has skipped long runs
+  conflict-prone than it looks even for "simple" fixes**, because the fork has skipped long runs
   of intervening upstream commits to the same files — a 3-way merge can conflict even when "our" side is
   just an older, otherwise-unmodified version of the file. Inspect the actual conflict before resolving;
   don't force it through.

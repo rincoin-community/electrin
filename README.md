@@ -44,6 +44,10 @@ Rincoin adaptation details:
 - [x] Fulcrum-rin server connection
 - [x] Lightning support hidden (not applicable to Rincoin)
 - [x] Block explorers updated
+- [x] Height-840,000 transition of Rincoin Community Core 1.2.0: replay-protected signatures
+      (`SIGHASH_FORKID`, fork ID 840) from block 840,000, confirmation prompt in the 10 blocks before it
+- [x] Hardware wallets disabled (no device supports the replay-protected signatures)
+- [x] Fiat exchange rates disabled (the inherited providers quote Bitcoin)
 
 ---
 
@@ -190,6 +194,11 @@ $ pytest tests/test_bitcoin.py -v
 - [Windows](contrib/build-wine/README.md)
 - [Android](contrib/android/Readme.md)
 
+All release targets except macOS are built locally with `contrib/release_build.sh`, or on GitHub
+with the manually started workflow **Build** (`.github/workflows/build.yml`), which also writes
+`SHA256SUMS.txt`, signs it and the update announcement when the signing secrets are set (see the
+header of the workflow), and can create a draft release.
+
 
 ## Upstream Credit
 
@@ -225,8 +234,8 @@ Each item references the source file(s) where the matching code comment lives.
 
 | Tag | Summary | Files |
 |-----|---------|-------|
-| `UPDATE-CHECK` | Re-enable update checking once Electrin has its own update server, signing keys and release signing process (5-step checklist in source). | `electrum/gui/qt/update_checker.py`, `electrum/gui/qt/main_window.py` |
-| `SECURITY` | Generate project GPG keys, publish fingerprints, update SECURITY.md table. | `SECURITY.md`, `electrum/gui/qt/update_checker.py` |
+| `UPDATE-CHECK` | The checker queries `https://electrin.net/version` and verifies the OpenPGP signature of the announcement against the pinned release key (`electrum/version_announcement.py`); it stays disabled until electrin.net serves an announcement signed with `contrib/sign_version_announcement.sh`. | `electrum/gui/qt/update_checker.py`, `electrum/gui/qt/main_window.py` |
+| `SECURITY` | The contact key listed in SECURITY.md (`pubkeys/takologi.asc`) differs from the release signing key (`pubkeys/rincoin-community-security.asc`); decide which one is the contact key. | `SECURITY.md` |
 | `CRASH-REPORTER` | Deploy crash-report endpoint on electrin.net, set `report_server`, test end-to-end. | `electrum/base_crash_reporter.py` |
 | `LABELS-SYNC` | Deploy an Electrin-owned labels-sync server, update `target_host`, remove disable guard. | `electrum/plugins/labels/labels.py` |
 
@@ -256,8 +265,12 @@ Each item references the source file(s) where the matching code comment lives.
 
 ### Exchange Rates
 
+Fiat exchange rates are disabled on all Rincoin networks (`HAS_FX_RATES = False` in
+`electrum/constants.py`): the inherited providers quote Bitcoin, not Rincoin.
+
 | Tag | Summary | Files |
 |-----|---------|-------|
+| `EXCHANGE` | Re-enable fiat rates with Rincoin-quoting providers only, after checking their data quality. | `electrum/constants.py`, `electrum/exchange_rate.py` |
 | `EXCHANGE` | CoinPaprika integration added (free API, no key). Verify `rin-rincoin` coin ID once Rincoin is listed. | `electrum/exchange_rate.py` |
 | `EXCHANGE` | LiveCoinWatch integration added (requires `LIVECOINWATCH_API_KEY` env var). Verify `RIN` code once listed. | `electrum/exchange_rate.py` |
 
@@ -265,7 +278,7 @@ Each item references the source file(s) where the matching code comment lives.
 
 | Tag | Summary | Files |
 |-----|---------|-------|
-| `SERVERS` | Only 2 Fulcrum-rin servers, both under `rincoin.net`. A third is on the way. Goal: wider network of independent operators. | `electrum/chains/rincoin/servers.json` |
+| `SERVERS` | Three Fulcrum-rin servers (`peer1`–`peer3.rincoin.tech`), all run by one operator. Goal: a wider network of independent operators. The servers must run Rincoin Community Core 1.2.0 before block 840,000, since Electrin follows the chain of the server it is connected to. | `electrum/chains/rincoin/servers.json` |
 
 
 ## Licence

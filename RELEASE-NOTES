@@ -1,3 +1,26 @@
+# Electrin 1.0.0-beta.1 (unreleased)
+ * Required upgrade for the height-840,000 transition of Rincoin Community Core 1.2.0:
+   - From block 840,000 every signature is replay-protected (SIGHASH_FORKID with fork ID 840,
+     BIP143 signature hash for every input). Electrin signs under the rules of the next block.
+   - In the 10 blocks before the transition, Electrin asks for confirmation before signing and
+     recommends waiting until the transition block has been mined.
+   - A transaction signed under the rules of the other side of the transition is signed again;
+     the network's rejection reasons are shown in plain words.
+   - Offline signing: an online Electrin records the chain height in the exported PSBT; a signer
+     that cannot determine on which side of the transition the next block is refuses to sign.
+ * Hardware wallets are disabled: no device supports the replay-protected signatures. Existing
+   hardware wallets can still be opened; they cannot sign from block 840,000. Move the coins to a
+   software wallet before that block, or restore the device's recovery seed as a software wallet.
+ * Default servers: peer1.rincoin.tech, peer2.rincoin.tech, peer3.rincoin.tech.
+ * Fiat exchange rates are disabled (the inherited providers quoted the Bitcoin price).
+ * Update check: the announcement now comes from electrin.net and is verified against the
+   pinned OpenPGP release key (Electrin 4.7.1rc1 asked electrum.org and reported Electrum
+   versions as updates).
+ * Electrin's own version numbering starts at 1.0.0; it follows Electrin 4.7.1rc1, whose number
+   was inherited from Electrum. The Android build installs over 4.7.1rc1 as an update.
+ * Network parameters: preview network added; testnet and regtest private-key (WIF) prefixes
+   aligned with Rincoin Community Core (193 and 239); maximum supply 168,000,000 RIN.
+
 # Release 4.7.1 (Feb 25, 2026)
  * Electrin fork changes:
    - Comprehensive rebranding from Electrum to Electrin
