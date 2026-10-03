@@ -45,7 +45,7 @@ from dataclasses import dataclass
 import electrum_ecc as ecc
 from aiorpcx import ignore_after, run_in_thread
 
-from . import util, keystore, transaction, bitcoin, coinchooser, bip32, descriptor, constants
+from . import util, keystore, transaction, bitcoin, coinchooser, bip32, descriptor, constants, chain_milestones
 from .i18n import _
 from .bip32 import BIP32Node, convert_bip32_intpath_to_strpath, convert_bip32_strpath_to_intpath
 from .logging import get_logger, Logger
@@ -231,6 +231,28 @@ def get_locktime_for_new_transaction(
 class CannotRBFTx(Exception): pass
 class TransactionPotentiallyDangerousException(Exception): pass
 class TransactionDangerousException(TransactionPotentiallyDangerousException): pass
+
+
+class ChainMilestoneConfirmationRequired(TransactionPotentiallyDangerousException, UserFacingException):
+    """The next block is close to a scheduled change of the signature rules
+    (see chain_milestones); signing needs the user's confirmation."""
+
+
+class HardwareKeystoreCannotSignException(UserFacingException):
+    """Rincoin height-840,000 transition: no hardware wallet can make the replay-protected
+    signatures (SIGHASH_FORKID) that the network requires from the activation height."""
+
+
+def hardware_wallet_forkid_message() -> str:
+    """User-facing explanation why hardware wallets cannot sign Rincoin transactions
+    from the activation height of the replay-protected signature hash."""
+    height = constants.net.SIGHASH_FORK_HEIGHT
+    return ' '.join([
+        _("Hardware wallets cannot sign Rincoin transactions from block {} on.").format(f"{height:,}"),
+        _("From that block the network requires a replay-protected signature format that no hardware device supports."),
+        _("To spend these coins, move them to a software wallet before that block, "
+          "or restore the recovery seed of your device as a software wallet in Electrin, on a computer you trust."),
+    ])
 
 
 class CannotBumpFee(CannotRBFTx):
@@ -2734,7 +2756,7 @@ class Abstract_Wallet(ABC, Logger, EventListener):
     def can_sign(self, tx: Transaction) -> bool:
         if not isinstance(tx, PartialTransaction):
             return False
-        if tx.is_complete():
+        if tx.is_complete() and not tx.signatures_of_other_forkid_regime():
             return False
         # add info to inputs if we can; otherwise we might return a false negative:
         tx.add_info_from_wallet(self)
@@ -2771,7 +2793,11 @@ class Abstract_Wallet(ABC, Logger, EventListener):
         if self.is_watching_only():
             return
         if not isinstance(tx, PartialTransaction):
-            return
+            # Height-840,000 transition: a transaction that is complete, but signed for the
+            # other side of the transition, is rebuilt from the wallet and signed again.
+            tx = self._partial_tx_for_forkid_resigning(tx)
+            if tx is None:
+                return
         if any(DummyAddress.is_dummy_address(txout.address) for txout in tx.outputs()):
             raise DummyAddressUsedInTxException("tried to sign tx with dummy address!")
 
@@ -2781,6 +2807,20 @@ class Abstract_Wallet(ABC, Logger, EventListener):
             raise TransactionDangerousException('Not signing transaction:\n' + sh_danger.get_long_message())
         if sh_danger.needs_confirm() and not ignore_warnings:
             raise TransactionPotentiallyDangerousException('Not signing transaction:\n' + sh_danger.get_long_message())
+
+        # Height-840,000 transition: decide the signature rules once for this signing session
+        # (raises ForkIdRegimeUnknown instead of guessing), and ask for confirmation close to
+        # a scheduled change of those rules.
+        forkid_active = self.forkid_regime_for_signing(tx)
+        if not ignore_warnings and (notices := self.get_signing_notices(tx)):
+            raise ChainMilestoneConfirmationRequired(
+                'Not signing transaction:\n' + chain_milestones.notices_text(notices))
+
+        # Height-840,000 transition: signatures made for the other side of the transition
+        # are dropped, so that the transaction can be signed again for the current height.
+        if dropped := tx.remove_signatures_of_other_forkid_regime(forkid_active=forkid_active):
+            self.logger.info(f"dropped {dropped} signature(s) made for the other side of the "
+                             f"height-{constants.net.SIGHASH_FORK_HEIGHT} transition; signing again")
 
         # find out if we are replacing a txbatcher transaction
         prevout_str = tx.inputs()[0].prevout.to_str()
@@ -2793,7 +2833,7 @@ class Abstract_Wallet(ABC, Logger, EventListener):
             if hasattr(txin, 'make_witness'):
                 self.logger.info(f'sign_transaction: adding witness using make_witness')
                 privkey = txin.privkey
-                sig = tx.sign_txin(i, privkey)
+                sig = tx.sign_txin(i, privkey, forkid_active=forkid_active)
                 txin.script_sig = b''
                 txin.witness = txin.make_witness(sig)
                 assert txin.is_complete()
@@ -2802,13 +2842,20 @@ class Abstract_Wallet(ABC, Logger, EventListener):
         # and full derivation paths as hw keystores might want them
         tmp_tx = copy.deepcopy(tx)
         tmp_tx.add_info_from_wallet(self, include_xpubs=True)
+        tmp_tx.forkid_active_for_signing = forkid_active
         # sign. start with ready keystores.
         # note: ks.ready_to_sign() side-effect: we trigger pairings with potential hw devices.
         #       We only do this once, before the loop, however we could rescan after each iteration,
         #       to see if the user connected/disconnected devices in the meantime.
+        # Height-840,000 transition: hardware keystores cannot make replay-protected signatures,
+        # so they are skipped once the rule is in force (other keystores still sign).
+        skipped_hw_keystore = False
         for k in sorted(self.get_keystores(), key=lambda ks: ks.ready_to_sign(), reverse=True):
             try:
                 if k.can_sign(tmp_tx):
+                    if forkid_active and isinstance(k, Hardware_KeyStore):
+                        skipped_hw_keystore = True
+                        continue
                     k.sign_transaction(tmp_tx, password)
             except UserCancelled:
                 continue
@@ -2816,6 +2863,8 @@ class Abstract_Wallet(ABC, Logger, EventListener):
         tmp_tx.remove_xpubs_and_bip32_paths()
         tx.combine_with_other_psbt(tmp_tx)
         tx.add_info_from_wallet(self, include_xpubs=False)
+        if skipped_hw_keystore:
+            raise HardwareKeystoreCannotSignException(hardware_wallet_forkid_message())
         return tx
 
     def try_detecting_internal_addresses_corruption(self) -> None:
@@ -3366,6 +3415,42 @@ class Abstract_Wallet(ABC, Logger, EventListener):
                          "otherwise you could end up paying a different fee."))]
         return TxSighashDanger(risk_level=rl.FEE_WARNING_SKIPCONFIRM, short_message=short_message, messages=messages)
 
+    def _forkid_height_evidence(self, tx: Optional[Transaction]) -> dict:
+        psbt_hint = tx.get_forkid_height_hint() if isinstance(tx, PartialTransaction) else None
+        return dict(psbt_hint=psbt_hint, stored_height=self.db.get('stored_height', 0))
+
+    def forkid_regime_for_signing(self, tx: Optional[Transaction] = None) -> bool:
+        """Whether signatures made now must be replay-protected (height-840,000 transition).
+        Raises transaction.ForkIdRegimeUnknown if the wallet cannot tell."""
+        return transaction.sighash_forkid_active_for_signing(**self._forkid_height_evidence(tx))
+
+    def get_signing_notices(self, tx: Optional[Transaction] = None) -> List['chain_milestones.MilestoneNotice']:
+        """Scheduled rule changes close enough to the next block to ask before signing."""
+        return chain_milestones.signing_notices(**self._forkid_height_evidence(tx))
+
+    def has_hardware_keystore(self) -> bool:
+        return any(isinstance(k, Hardware_KeyStore) for k in self.get_keystores())
+
+    def _partial_tx_for_forkid_resigning(self, tx: Transaction) -> Optional[PartialTransaction]:
+        """For a complete transaction whose ECDSA signatures do not match the replay-protection
+        regime in force (see PartialTransaction.signatures_of_other_forkid_regime), returns an
+        unsigned PartialTransaction with the wallet's input information, else None."""
+        if constants.net.SIGHASH_FORK_ID is None:
+            return None
+        hashtypes = tx.ecdsa_sighash_bytes()
+        if not hashtypes:
+            return None
+        forkid_active = transaction.sighash_forkid_active(**self._forkid_height_evidence(tx))
+        if all(bool(ht & Sighash.FORKID) == forkid_active for ht in hashtypes):
+            return None
+        ptx = PartialTransaction.from_tx(tx)
+        ptx.add_info_from_wallet(self)
+        if not any(self.is_mine(txin.address) for txin in ptx.inputs()):
+            return None
+        self.logger.info(f"transaction {tx.txid()} is signed for the other side of the "
+                         f"height-{constants.net.SIGHASH_FORK_HEIGHT} transition; signing again")
+        return ptx
+
     def check_sighash(self, tx: 'PartialTransaction') -> TxSighashDanger:
         """Checks the Sighash for my inputs and considers if the tx is safe to sign."""
         assert isinstance(tx, PartialTransaction)
@@ -3380,12 +3465,12 @@ class Abstract_Wallet(ABC, Logger, EventListener):
         }
         sighash_danger = TxSighashDanger()
         for txin_idx, txin in enumerate(tx.inputs()):
-            if txin.sighash in (None, Sighash.ALL):
+            if txin.sighash is None or Sighash.base(txin.sighash) == Sighash.ALL:
                 continue  # None will get converted to Sighash.ALL, so these values are safe
             # found interesting sighash flag
             addr = self.adb.get_txin_address(txin)
             if self.is_mine(addr):
-                sh_base = txin.sighash & (Sighash.ANYONECANPAY ^ 0xff)
+                sh_base = Sighash.base(txin.sighash) & (Sighash.ANYONECANPAY ^ 0xff)
                 sh_acp = txin.sighash & Sighash.ANYONECANPAY
                 for sh in [sh_base, sh_acp]:
                     try:

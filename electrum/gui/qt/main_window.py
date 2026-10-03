@@ -671,6 +671,13 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
             ])
             self.show_warning(msg, title=_('Watch-only wallet'))
 
+    def warn_if_hardware_wallet(self):
+        # Rincoin height-840,000 transition: no hardware device can sign from the activation height
+        if constants.net.SIGHASH_FORK_HEIGHT is None or not self.wallet.has_hardware_keystore():
+            return
+        from electrum.wallet import hardware_wallet_forkid_message
+        self.show_warning(hardware_wallet_forkid_message(), title=_('Hardware wallet'))
+
     def warn_if_testnet(self):
         if not constants.net.TESTNET:
             return
@@ -1492,8 +1499,39 @@ class ElectrumWindow(QMainWindow, MessageBoxMixin, Logger, QtEventListener):
     def broadcast_transaction(self, tx: Transaction, *, invoice: Invoice = None):
         self.send_tab.broadcast_transaction(tx, invoice=invoice)
 
-    @protected
     def sign_tx(
+        self,
+        tx: PartialTransaction,
+        *,
+        callback,
+        external_keypairs: Optional[Mapping[bytes, bytes]],
+    ):
+        if not self.confirm_signing_close_to_milestone(tx):
+            callback(False)
+            return
+        self._sign_tx_protected(tx, callback=callback, external_keypairs=external_keypairs)
+
+    def confirm_signing_close_to_milestone(self, tx: Optional[PartialTransaction]) -> bool:
+        """Asks for confirmation while the next block is close to a scheduled change of the
+        signature rules (see electrum/chain_milestones.py). Returns True to go on signing."""
+        from electrum import chain_milestones
+        try:
+            notices = self.wallet.get_signing_notices(tx)
+        except Exception as e:
+            self.logger.exception('')
+            notices = []
+        if not notices:
+            return True
+        return self.question(
+            msg='\n\n'.join([
+                chain_milestones.notices_text(notices),
+                _('Are you sure you want to sign this transaction now?'),
+            ]),
+            title=chain_milestones.notices_title(notices),
+        )
+
+    @protected
+    def _sign_tx_protected(
         self,
         tx: PartialTransaction,
         *,

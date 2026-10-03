@@ -28,7 +28,9 @@ def auth_protect(func=None, reject=None, method='payment_auth', message=''):
             _logger.debug('object already has a pending authed function call')
             raise Exception('object already has a pending authed function call')
         setattr(self, '__auth_fcall', (func, args, kwargs, reject))
-        getattr(self, 'authRequired').emit(method, message)
+        # message can be a callable taking the call's arguments, for a text that depends on them
+        auth_message = message(self, *args, **kwargs) if callable(message) else message
+        getattr(self, 'authRequired').emit(method, auth_message)
 
     return wrapper
 

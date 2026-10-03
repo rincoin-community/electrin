@@ -26,6 +26,7 @@
 # Note: The deserialization code originally comes from ABE.
 
 import struct
+import time
 import io
 import base64
 from typing import (
@@ -41,9 +42,9 @@ import re
 import electrum_ecc as ecc
 from electrum_ecc.util import bip340_tagged_hash
 
-from . import bitcoin, bip32
+from . import bitcoin, bip32, constants
 from .bip32 import BIP32Node
-from .util import to_bytes, bfh, chunks, is_hex_str, parse_max_spend
+from .util import to_bytes, bfh, chunks, is_hex_str, parse_max_spend, UserFacingException
 from .bitcoin import (
     TYPE_ADDRESS, TYPE_SCRIPT, hash_160, hash160_to_p2sh, hash160_to_p2pkh, hash_to_segwit_addr, var_int,
     TOTAL_COIN_SUPPLY_LIMIT_IN_BTC, COIN, opcodes, base_decode, base_encode, construct_witness, construct_script,
@@ -51,6 +52,7 @@ from .bitcoin import (
 )
 from .crypto import sha256d, sha256
 from .logging import get_logger
+from .i18n import _
 from .util import ShortID, OldTaskGroup
 from .descriptor import Descriptor, MissingSolutionPiece, create_dummy_descriptor_from_address, DUMMY_DER_SIG
 
@@ -110,6 +112,8 @@ class Sighash(IntEnum):
     NONE = 2
     SINGLE = 3
     ANYONECANPAY = 0x80
+    # Rincoin height-840,000 transition: replay-protected ECDSA signature (as on Bitcoin Gold)
+    FORKID = 0x40
 
     @classmethod
     def is_valid(cls, sighash: int, *, is_taproot: bool = False) -> bool:
@@ -119,13 +123,162 @@ class Sighash(IntEnum):
         }
         if is_taproot:
             valid_flags.add(0x00)
+        elif constants.net.SIGHASH_FORK_ID is not None:
+            # the flag is only defined for ECDSA signatures, on networks with a fork ID
+            sighash &= ~Sighash.FORKID
         return sighash in valid_flags
+
+    @classmethod
+    def base(cls, sighash: int) -> int:
+        """The sighash without the replay-protection flag."""
+        return sighash & ~Sighash.FORKID
 
     @classmethod
     def to_sigbytes(cls, sighash: int) -> bytes:
         if sighash == Sighash.DEFAULT:
             return b""
         return sighash.to_bytes(length=1, byteorder="big")
+
+
+# --- Replay protection of the Rincoin height-840,000 transition -----------------------
+# From the activation height (constants.net.SIGHASH_FORK_HEIGHT) every ECDSA signature has to
+# carry Sighash.FORKID and is hashed with the BIP143 algorithm whatever the script type, with
+# the hash type serialized as (sighash | fork_id << 8). The rule applies to the block a
+# transaction confirms in, so a signer looks at the tip height plus one.
+#
+# The tip height comes from the network layer when it is connected and its headers are synced.
+# Without it (offline or air-gapped signing, headers still catching up) the regime is decided from
+# bounds on the current height: a lower bound from the last height the wallet saw, the height
+# an online Electrin wrote into the PSBT, and the checkpoints; an upper bound from the clock,
+# counted from the PSBT height or a reference block compiled into the release, at a block rate
+# faster than the network's target. A signer whose bounds do not decide the regime refuses to
+# sign instead of guessing.
+
+# Block interval assumed for upper bounds: well below the 60-second target, so that the bound
+# is not exceeded even if blocks come faster than the target for a while.
+FORKID_MIN_BLOCK_SECONDS = 40
+
+# PSBT global proprietary key (BIP-174 type 0xFC, identifier "electrin", subtype 0x01) that
+# carries the tip height and the time an online Electrin saw it: uint32 LE height, uint64 LE time.
+PSBT_PROPRIETARY_IDENTIFIER = b"electrin"
+PSBT_PROPRIETARY_SUBTYPE_TIP_HEIGHT = 0x01
+
+_forkid_tip_height_source = None  # type: Optional[Callable[[], Optional[int]]]
+_forkid_lower_bound_source = None  # type: Optional[Callable[[], Optional[int]]]
+_forkid_warned_no_height = False
+
+
+class ForkIdRegimeUnknown(UserFacingException):
+    """The signer cannot tell on which side of the height-840,000 transition the next block is."""
+
+
+def set_sighash_forkid_tip_height_source(source: Optional[Callable[[], Optional[int]]]) -> None:
+    """Registers a callable returning the height of the synced, verified header tip, or None
+    while that height is not known (not connected, headers still catching up)."""
+    global _forkid_tip_height_source
+    _forkid_tip_height_source = source
+
+
+def set_sighash_forkid_height_lower_bound_source(source: Optional[Callable[[], Optional[int]]]) -> None:
+    """Registers a callable returning a height the chain is known to have reached (the local
+    POW-verified headers, even while they are still catching up), or None."""
+    global _forkid_lower_bound_source
+    _forkid_lower_bound_source = source
+
+
+def synced_tip_height() -> Optional[int]:
+    if _forkid_tip_height_source is None:
+        return None
+    return _forkid_tip_height_source()
+
+
+def forkid_height_bounds(
+    *,
+    psbt_hint: Optional[Tuple[int, int]] = None,
+    stored_height: Optional[int] = None,
+    now: Optional[int] = None,
+) -> Tuple[int, Optional[int]]:
+    """Bounds (lower, upper) on the current tip height when it is not known directly.
+    upper is None when nothing limits it."""
+    if now is None:
+        now = int(time.time())
+    lower = max(0, constants.net.max_checkpoint())
+    if _forkid_lower_bound_source is not None:
+        lower = max(lower, _forkid_lower_bound_source() or 0)
+    upper = None  # type: Optional[int]
+    if stored_height:
+        lower = max(lower, stored_height)
+    anchors = []
+    if psbt_hint is not None:
+        anchors.append(psbt_hint)
+    if constants.net.FORKID_HEIGHT_REFERENCE is not None:
+        anchors.append(constants.net.FORKID_HEIGHT_REFERENCE)
+    for height, timestamp in anchors:
+        lower = max(lower, height)
+        if now >= timestamp:
+            bound = height + (now - timestamp) // FORKID_MIN_BLOCK_SECONDS
+            upper = bound if upper is None else min(upper, bound)
+    if upper is not None and upper < lower:
+        upper = lower  # the clock is behind the evidence; trust the evidence
+    return lower, upper
+
+
+def sighash_forkid_regime(
+    *,
+    tip_height: Optional[int] = None,
+    psbt_hint: Optional[Tuple[int, int]] = None,
+    stored_height: Optional[int] = None,
+    now: Optional[int] = None,
+) -> Optional[bool]:
+    """Whether a signature made now has to carry Sighash.FORKID; None if that cannot be told.
+
+    tip_height: height of the synced header tip. When None, the registered source is asked,
+    and without an answer the bounds of forkid_height_bounds() decide.
+    A transaction signed now can confirm in block tip_height + 1 at the earliest.
+    """
+    fork_height = constants.net.SIGHASH_FORK_HEIGHT
+    if fork_height is None or constants.net.SIGHASH_FORK_ID is None:
+        return False
+    if tip_height is None:
+        tip_height = synced_tip_height()
+    if tip_height is not None:
+        return tip_height + 1 >= fork_height
+    lower, upper = forkid_height_bounds(psbt_hint=psbt_hint, stored_height=stored_height, now=now)
+    if lower + 1 >= fork_height:
+        return True
+    if upper is not None and upper + 1 < fork_height:
+        return False
+    return None
+
+
+def sighash_forkid_active(*, tip_height: Optional[int] = None, **kwargs) -> bool:
+    """Best-effort variant of sighash_forkid_regime() for reading and verifying signatures:
+    an undecided regime counts as not in force (a warning is logged once)."""
+    global _forkid_warned_no_height
+    regime = sighash_forkid_regime(tip_height=tip_height, **kwargs)
+    if regime is None:
+        if not _forkid_warned_no_height:
+            _forkid_warned_no_height = True
+            _logger.warning(
+                f"chain height unknown near the activation height "
+                f"{constants.net.SIGHASH_FORK_HEIGHT} ({constants.net.NET_NAME}); "
+                f"treating SIGHASH_FORKID as not in force for verification")
+        return False
+    return regime
+
+
+def sighash_forkid_active_for_signing(**kwargs) -> bool:
+    """Like sighash_forkid_regime(), but raises ForkIdRegimeUnknown instead of guessing."""
+    regime = sighash_forkid_regime(**kwargs)
+    if regime is None:
+        raise ForkIdRegimeUnknown(' '.join([
+            _("Electrin cannot determine the current height of the Rincoin chain, which is close to "
+              "block {}, where the transaction signature rules change.").format(
+                f"{constants.net.SIGHASH_FORK_HEIGHT:,}"),
+            _("Connect to the network and wait until the wallet is synchronized, then sign again."),
+            _("For offline signing, export the unsigned transaction from an online Electrin shortly before signing it."),
+        ]))
+    return regime
 
 
 class TxOutput:
@@ -402,6 +555,21 @@ class TxInput:
     def is_coinbase_input(self) -> bool:
         """Whether this is the input of a coinbase tx."""
         return self.prevout.is_coinbase()
+
+    def ecdsa_sighash_bytes(self) -> List[int]:
+        """The hash type byte of every DER-encoded ECDSA signature found in the scriptSig
+        and witness of this input (best effort: pushes that look like signatures)."""
+        def looks_like_der_sig(item: bytes) -> bool:
+            return 9 <= len(item) <= 73 and item[0] == 0x30 and item[1] == len(item) - 3
+        items = []
+        if self.script_sig:
+            try:
+                items += [op[1] for op in script_GetOp(self.script_sig) if op[1]]
+            except MalformedBitcoinScript:
+                pass
+        if self.witness:
+            items += [item for item in self.witness_elements() if item]
+        return [item[-1] for item in items if looks_like_der_sig(item)]
 
     def is_coinbase_output(self) -> bool:
         """Whether the coin being spent is an output of a coinbase tx.
@@ -1056,7 +1224,13 @@ class Transaction:
         *,
         sighash: Optional[int] = None,
         sighash_cache: SighashCache = None,
+        forkid_active: Optional[bool] = None,
     ) -> bytes:
+        """forkid_active: whether the replay protection of the height-840,000 transition is in
+        force for the block this tx confirms in. None means: ask sighash_forkid_active().
+        A sighash carrying Sighash.FORKID while the rule is not in force is hashed the old way
+        with that very hash type, exactly as Core does; such a signature is not valid anywhere.
+        """
         nVersion = int.to_bytes(self.version, length=4, byteorder="little", signed=True)
         nLocktime = int.to_bytes(self.locktime, length=4, byteorder="little", signed=False)
         inputs = self.inputs()
@@ -1072,7 +1246,16 @@ class Transaction:
             raise Exception(f"SIGHASH_FLAG ({sighash}) not supported!")
         if sighash_cache is None:
             sighash_cache = SighashCache()
-        if txin.is_segwit():
+        use_forkid = False
+        if not txin.is_taproot() and (sighash & Sighash.FORKID):
+            if forkid_active is None:
+                forkid_active = sighash_forkid_active()
+            use_forkid = bool(forkid_active)
+        if use_forkid:
+            nHashType = int.to_bytes(sighash | (constants.net.SIGHASH_FORK_ID << 8), length=4, byteorder="little", signed=False)
+        else:
+            nHashType = int.to_bytes(sighash, length=4, byteorder="little", signed=False)
+        if txin.is_segwit() or use_forkid:
             if txin.is_taproot():
                 scache = sighash_cache.get_witver1_data_for_tx(self)
                 sighash_epoch = b"\x00"
@@ -1110,7 +1293,7 @@ class Transaction:
                     # note: we could cache this to avoid some potential DOS vectors:
                     preimage_outputdata += sha256(txout.serialize_to_network())
                 return bytes(sighash_epoch + hash_type + preimage_txdata + preimage_inputdata + preimage_outputdata)
-            else:  # segwit (witness v0)
+            else:  # segwit (witness v0), or any ECDSA input with the fork ID in force (BIP143 digest)
                 scache = sighash_cache.get_witver0_data_for_tx(self)
                 if not (sighash & Sighash.ANYONECANPAY):
                     hashPrevouts = scache.hashPrevouts
@@ -1132,18 +1315,16 @@ class Transaction:
                 scriptCode = var_int(len(preimage_script)) + preimage_script
                 amount = int.to_bytes(txin.value_sats(), length=8, byteorder="little", signed=False)
                 nSequence = int.to_bytes(txin.nsequence, length=4, byteorder="little", signed=False)
-                nHashType = int.to_bytes(sighash, length=4, byteorder="little", signed=False)
                 preimage = nVersion + hashPrevouts + hashSequence + outpoint + scriptCode + amount + nSequence + hashOutputs + nLocktime + nHashType
                 return preimage
         else:  # legacy sighash (pre-segwit)
-            if sighash != Sighash.ALL:
+            if Sighash.base(sighash) != Sighash.ALL:
                 raise Exception(f"SIGHASH_FLAG ({sighash}) not supported! (for legacy sighash)")
             preimage_script = txin.get_scriptcode_for_sighash()
             txins = var_int(len(inputs)) + b"".join(
                 txin.serialize_to_network(script_sig=preimage_script if txin_index==k else b"")
                 for k, txin in enumerate(inputs))
             txouts = var_int(len(outputs)) + b"".join(o.serialize_to_network() for o in outputs)
-            nHashType = int.to_bytes(sighash, length=4, byteorder="little", signed=False)
             preimage = nVersion + txins + txouts + nLocktime + nHashType
             return preimage
         raise Exception("should not reach this")
@@ -1155,13 +1336,20 @@ class Transaction:
         pubkey_bytes: bytes,
         sig: bytes,
         sighash_cache: SighashCache = None,
+        forkid_active: Optional[bool] = None,
     ) -> bool:
+        """forkid_active: see serialize_preimage(). Where the rule is in force a signature
+        without Sighash.FORKID is never valid."""
         txin = self.inputs()[txin_index]
         if txin.is_taproot():
             raise Exception("not implemented")  # TODO
         else:
             der_sig, sighash = sig[:-1], sig[-1]
-            pre_hash = self.serialize_preimage(txin_index, sighash=sighash, sighash_cache=sighash_cache)
+            if forkid_active is None:
+                forkid_active = sighash_forkid_active()
+            if forkid_active and not (sighash & Sighash.FORKID):
+                return False
+            pre_hash = self.serialize_preimage(txin_index, sighash=sighash, sighash_cache=sighash_cache, forkid_active=forkid_active)
             pubkey = ecc.ECPubkey(pubkey_bytes)
             msg_hash = sha256d(pre_hash)
             sig64 = ecc.ecdsa_sig64_from_der_sig(der_sig)
@@ -1170,6 +1358,11 @@ class Transaction:
     def is_segwit(self, *, guess_for_address=False):
         return any(txin.is_segwit(guess_for_address=guess_for_address)
                    for txin in self.inputs())
+
+    def ecdsa_sighash_bytes(self) -> List[int]:
+        """The hash type byte of every DER-encoded ECDSA signature found in the scriptSigs
+        and witnesses of this transaction (best effort: pushes that look like signatures)."""
+        return [ht for txin in self.inputs() for ht in txin.ecdsa_sighash_bytes()]
 
     def invalidate_ser_cache(self):
         self._cached_network_ser = None
@@ -2210,6 +2403,9 @@ class PartialTransaction(Transaction):
         self._outputs = []  # type: List[PartialTxOutput]
         self._unknown = {}  # type: Dict[bytes, bytes]
         self.rbf_merge_txid = None
+        # Height-840,000 transition: the regime a signer decided for this signing session
+        # (set by the wallet before its keystores sign); None means decide when signing.
+        self.forkid_active_for_signing = None  # type: Optional[bool]
 
     def to_json(self) -> dict:
         d = super().to_json()
@@ -2358,6 +2554,23 @@ class PartialTransaction(Transaction):
             self.BIP69_sort()
         return self
 
+    @classmethod
+    def _forkid_height_hint_fullkey(cls) -> bytes:
+        key = (var_int(len(PSBT_PROPRIETARY_IDENTIFIER)) + PSBT_PROPRIETARY_IDENTIFIER
+               + bytes([PSBT_PROPRIETARY_SUBTYPE_TIP_HEIGHT]))
+        return PSBTSection.get_fullkey_from_keytype_and_key(0xFC, key)
+
+    def get_forkid_height_hint(self) -> Optional[Tuple[int, int]]:
+        """(tip height, unix time) written by an online Electrin, or None."""
+        val = self._unknown.get(self._forkid_height_hint_fullkey())
+        if val is None or len(val) != 12:
+            return None
+        return int.from_bytes(val[:4], 'little'), int.from_bytes(val[4:], 'little')
+
+    def set_forkid_height_hint(self, height: int, timestamp: int) -> None:
+        self._unknown[self._forkid_height_hint_fullkey()] = (
+            int.to_bytes(height, 4, 'little') + int.to_bytes(timestamp, 8, 'little'))
+
     def _serialize_psbt(self, fd) -> None:
         wr = PSBTSection.create_psbt_writer(fd)
         fd.write(b'psbt\xff')
@@ -2366,6 +2579,11 @@ class PartialTransaction(Transaction):
         for bip32node, (xfp, path) in sorted(self.xpubs.items()):
             val = pack_bip32_root_fingerprint_and_int_path(xfp, path)
             wr(PSBTGlobalType.XPUB, val, key=bip32node.to_bytes())
+        # Height-840,000 transition: an online Electrin records the synced tip height, so that
+        # an offline signer of this PSBT can tell which signature rules apply.
+        if constants.net.SIGHASH_FORK_HEIGHT is not None and not self.is_complete():
+            if (tip_height := synced_tip_height()) is not None:
+                self.set_forkid_height_hint(tip_height, int(time.time()))
         for full_key, val in sorted(self._unknown.items()):
             key_type, key = PSBTSection.get_keytype_and_key_from_fullkey(full_key)
             wr(key_type, val, key=key)
@@ -2480,9 +2698,13 @@ class PartialTransaction(Transaction):
             self._outputs.sort(key = lambda o: (o.value, o.scriptpubkey))
         self.invalidate_ser_cache()
 
-    def sign(self, keypairs: Mapping[bytes, bytes]) -> None:
+    def sign(self, keypairs: Mapping[bytes, bytes], *, forkid_active: Optional[bool] = None) -> None:
         # keypairs:  pubkey_bytes -> secret_bytes
         sighash_cache = SighashCache()
+        if forkid_active is None:
+            forkid_active = self.forkid_active_for_signing
+        if forkid_active is None and any(not txin.is_taproot() for txin in self.inputs()):
+            forkid_active = sighash_forkid_active_for_signing(psbt_hint=self.get_forkid_height_hint())
         for i, txin in enumerate(self.inputs()):
             for pubkey in txin.pubkeys:
                 if txin.is_complete():
@@ -2491,7 +2713,7 @@ class PartialTransaction(Transaction):
                     continue
                 _logger.info(f"adding signature for {pubkey.hex()}. spending utxo {txin.prevout.to_str()}")
                 sec = keypairs[pubkey]
-                sig = self.sign_txin(i, sec, sighash_cache=sighash_cache)
+                sig = self.sign_txin(i, sec, sighash_cache=sighash_cache, forkid_active=forkid_active)
                 self.add_signature_to_txin(txin_idx=i, signing_pubkey=pubkey, sig=sig)
 
         _logger.debug(f"tx.sign() finished. is_complete={self.is_complete()}")
@@ -2503,10 +2725,21 @@ class PartialTransaction(Transaction):
         privkey_bytes: bytes,
         *,
         sighash_cache: SighashCache = None,
+        forkid_active: Optional[bool] = None,
     ) -> bytes:
+        """forkid_active: see serialize_preimage(). Where the rule is in force every ECDSA
+        signature gets Sighash.FORKID and the replay-protected digest."""
         txin = self.inputs()[txin_index]
         txin.validate_data(for_signing=True)
-        pre_hash = self.serialize_preimage(txin_index, sighash_cache=sighash_cache)
+        sighash = None
+        if not txin.is_taproot():
+            if forkid_active is None:
+                forkid_active = self.forkid_active_for_signing
+            if forkid_active is None:
+                forkid_active = sighash_forkid_active_for_signing(psbt_hint=self.get_forkid_height_hint())
+            sighash = txin.sighash if txin.sighash is not None else Sighash.ALL
+            sighash = (sighash | Sighash.FORKID) if forkid_active else Sighash.base(sighash)
+        pre_hash = self.serialize_preimage(txin_index, sighash=sighash, sighash_cache=sighash_cache, forkid_active=forkid_active)
         if txin.is_taproot():
             # note: privkey_bytes is the internal key
             merkle_root = txin.tap_merkle_root or bytes()
@@ -2519,7 +2752,6 @@ class PartialTransaction(Transaction):
             privkey = ecc.ECPrivkey(privkey_bytes)
             msg_hash = sha256d(pre_hash)
             sig = privkey.ecdsa_sign(msg_hash, sigencode=ecc.ecdsa_der_sig_from_r_and_s)
-            sighash = txin.sighash if txin.sighash is not None else Sighash.ALL
         return sig + Sighash.to_sigbytes(sighash)
 
     def is_complete(self) -> bool:
@@ -2571,7 +2803,8 @@ class PartialTransaction(Transaction):
                 continue
             if sig in list(txin.sigs_ecdsa.values()):
                 continue
-            msg_hash = sha256d(self.serialize_preimage(i))
+            # the hash type byte of the signature says which digest it was made over
+            msg_hash = sha256d(self.serialize_preimage(i, sighash=sig[-1]))
             sig64 = ecc.ecdsa_sig64_from_der_sig(sig[:-1])
             for recid in range(4):
                 try:
@@ -2682,6 +2915,46 @@ class PartialTransaction(Transaction):
             txin.witness = None
         assert not self.is_complete()
         self.invalidate_ser_cache()
+
+    def signatures_of_other_forkid_regime(self, *, forkid_active: Optional[bool] = None) -> Dict[int, List[Optional[bytes]]]:
+        """ECDSA signatures that do not match the replay-protection regime in force:
+        signatures without Sighash.FORKID once the height-840,000 rule applies, and
+        signatures with it before. Returns {txin_index: [pubkey, ...]}; a pubkey is None
+        for a signature that sits in a finalized scriptSig or witness.
+        """
+        if constants.net.SIGHASH_FORK_ID is None:
+            return {}
+        if forkid_active is None:
+            forkid_active = sighash_forkid_active()
+        stale = {}
+        for i, txin in enumerate(self.inputs()):
+            pubkeys = [pubkey for pubkey, sig in txin.sigs_ecdsa.items()
+                       if bool(sig[-1] & Sighash.FORKID) != bool(forkid_active)]
+            if not txin.sigs_ecdsa:  # finalized input: look at the scriptSig and witness
+                pubkeys += [None for ht in txin.ecdsa_sighash_bytes()
+                            if bool(ht & Sighash.FORKID) != bool(forkid_active)]
+            if pubkeys:
+                stale[i] = pubkeys
+        return stale
+
+    def remove_signatures_of_other_forkid_regime(self, *, forkid_active: Optional[bool] = None) -> int:
+        """Drops the signatures found by signatures_of_other_forkid_regime() and returns how
+        many. Lets a transaction signed on the other side of the transition be signed again.
+        """
+        dropped = 0
+        inputs = self.inputs()
+        for i, stale in self.signatures_of_other_forkid_regime(forkid_active=forkid_active).items():
+            txin = inputs[i]
+            for pubkey in stale:
+                if pubkey is not None:
+                    del txin.sigs_ecdsa[pubkey]
+                dropped += 1
+            if stale:
+                txin.script_sig = None
+                txin.witness = None
+        if dropped:
+            self.invalidate_ser_cache()
+        return dropped
 
 
 def pack_bip32_root_fingerprint_and_int_path(xfp: bytes, path: Sequence[int]) -> bytes:

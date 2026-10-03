@@ -80,6 +80,7 @@ from . import GuiImportError
 from . import crypto
 from . import constants
 from . import descriptor
+from .interface import TxBroadcastError
 
 if TYPE_CHECKING:
     from .network import Network
@@ -604,8 +605,8 @@ class Commands(Logger):
         arg:bool:ignore_warnings:ignore warnings
         """
         tx = tx_from_any(tx)
-        wallet.sign_transaction(tx, password, ignore_warnings=ignore_warnings)
-        return tx.serialize()
+        signed = wallet.sign_transaction(tx, password, ignore_warnings=ignore_warnings)
+        return (signed or tx).serialize()
 
     @command('')
     async def deserialize(self, tx):
@@ -625,7 +626,12 @@ class Commands(Logger):
         arg:str:tx:Serialized transaction (must be hexadecimal)
         """
         tx = Transaction(tx)
-        await self.network.broadcast_transaction(tx)
+        try:
+            await self.network.broadcast_transaction(tx)
+        except TxBroadcastError as e:
+            # the sanitized reason (e.g. a signature made for the other side of the
+            # height-840,000 transition) instead of a generic internal error
+            raise UserFacingException(e.get_message_for_gui()) from e
         return tx.txid()
 
     @command('')
@@ -948,7 +954,8 @@ class Commands(Logger):
 
     @command('wp')
     async def payto(self, destination, amount, fee=None, feerate=None, from_addr=None, from_coins=None, change_addr=None,
-                    unsigned=False, rbf=True, password=None, locktime=None, addtransaction=False, wallet: Abstract_Wallet = None):
+                    unsigned=False, rbf=True, password=None, locktime=None, addtransaction=False, ignore_warnings=False,
+                    wallet: Abstract_Wallet = None):
         """Create an on-chain transaction.
 
         arg:str:destination:Bitcoin address, contact or alias
@@ -962,6 +969,7 @@ class Commands(Logger):
         arg:int:locktime:Set locktime block number
         arg:bool:unsigned:Do not sign transaction
         arg:json:from_coins:Source coins (must be in wallet; use sweep to spend from non-wallet address)
+        arg:bool:ignore_warnings:Sign even if signing needs confirmation (e.g. close to a change of the signature rules)
         """
         return await self.paytomany(
             outputs=[(destination, amount),],
@@ -975,12 +983,14 @@ class Commands(Logger):
             password=password,
             locktime=locktime,
             addtransaction=addtransaction,
+            ignore_warnings=ignore_warnings,
             wallet=wallet,
         )
 
     @command('wp')
     async def paytomany(self, outputs, fee=None, feerate=None, from_addr=None, from_coins=None, change_addr=None,
-                        unsigned=False, rbf=True, password=None, locktime=None, addtransaction=False, wallet: Abstract_Wallet = None):
+                        unsigned=False, rbf=True, password=None, locktime=None, addtransaction=False, ignore_warnings=False,
+                        wallet: Abstract_Wallet = None):
         """Create a multi-output transaction.
 
         arg:json:outputs:json list of ["address", "amount in BTC"]
@@ -993,6 +1003,7 @@ class Commands(Logger):
         arg:int:locktime:Set locktime block number
         arg:bool:unsigned:Do not sign transaction
         arg:json:from_coins:Source coins (must be in wallet; use sweep to spend from non-wallet address)
+        arg:bool:ignore_warnings:Sign even if signing needs confirmation (e.g. close to a change of the signature rules)
         """
         fee_policy = self._get_fee_policy(fee, feerate)
         domain_addr = from_addr.split(',') if from_addr else None
@@ -1018,7 +1029,7 @@ class Commands(Logger):
             locktime=locktime,
         )
         if not unsigned:
-            wallet.sign_transaction(tx, password)
+            wallet.sign_transaction(tx, password, ignore_warnings=ignore_warnings)
         result = tx.serialize()
         if addtransaction:
             await self.addtransaction(result, wallet=wallet)
@@ -1047,7 +1058,8 @@ class Commands(Logger):
         return json_normalize(wallet.get_onchain_capital_gains(fx, **kwargs))
 
     @command('wp')
-    async def bumpfee(self, tx, new_fee_rate, from_coins=None, decrease_payment=False, password=None, unsigned=False, wallet: Abstract_Wallet = None):
+    async def bumpfee(self, tx, new_fee_rate, from_coins=None, decrease_payment=False, password=None, unsigned=False,
+                      ignore_warnings=False, wallet: Abstract_Wallet = None):
         """
         Bump the fee for an unconfirmed transaction.
         'tx' can be either a raw hex tx or a txid. If txid, the corresponding tx must already be part of the wallet history.
@@ -1057,6 +1069,7 @@ class Commands(Logger):
         arg:bool:decrease_payment:Whether payment amount will be decreased (true/false)
         arg:bool:unsigned:Do not sign transaction
         arg:json:from_coins:Coins that may be used to inncrease the fee (must be in wallet)
+        arg:bool:ignore_warnings:Sign even if signing needs confirmation (e.g. close to a change of the signature rules)
         """
         if is_hash256_str(tx):  # txid
             tx = wallet.db.get_transaction(tx)
@@ -1080,7 +1093,7 @@ class Commands(Logger):
             strategy=BumpFeeStrategy.DECREASE_PAYMENT if decrease_payment else BumpFeeStrategy.PRESERVE_PAYMENT,
             new_fee_rate=new_fee_rate)
         if not unsigned:
-            wallet.sign_transaction(new_tx, password)
+            wallet.sign_transaction(new_tx, password, ignore_warnings=ignore_warnings)
         return new_tx.serialize()
 
     @command('w')

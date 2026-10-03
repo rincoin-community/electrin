@@ -49,7 +49,9 @@ from .util import (
 from . import constants
 from . import blockchain
 from . import dns_hacks
-from .transaction import Transaction
+from .transaction import (
+    Transaction, set_sighash_forkid_tip_height_source, set_sighash_forkid_height_lower_bound_source,
+)
 from .blockchain import Blockchain
 from .interface import (
     Interface, PREFERRED_NETWORK_PROTOCOL, RequestTimedOut, NetworkTimeout, BUCKET_NAME_OF_ONION_SERVERS,
@@ -350,6 +352,9 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
         self.daemon = daemon
 
         blockchain.read_blockchains(self.config)
+        # the replay protection of the height-840,000 transition is decided by the tip height
+        set_sighash_forkid_tip_height_source(self.get_synced_tip_height)
+        set_sighash_forkid_height_lower_bound_source(self.get_local_height)
         blockchain.init_headers_file_for_best_chain()
         self.logger.info(f"blockchains {list(map(lambda b: b.forkpoint, blockchain.blockchains.values()))}")
         self._blockchain_preferred_block = self.config.BLOCKCHAIN_PREFERRED_BLOCK  # type: Dict[str, Any]
@@ -1201,6 +1206,17 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
         """Length of header chain, as claimed by main interface."""
         interface = self.interface
         return interface.tip if interface else 0
+
+    def get_synced_tip_height(self) -> Optional[int]:
+        """Height of the POW-verified header tip while connected and caught up with the main
+        interface's tip, else None (used to decide transaction signature rules)."""
+        if not self.is_connected():
+            return None
+        local_height = self.get_local_height()
+        server_height = self.get_server_height()
+        if server_height and local_height < server_height:
+            return None  # headers still catching up
+        return local_height
 
     def get_local_height(self) -> int:
         """Length of header chain, POW-verified.

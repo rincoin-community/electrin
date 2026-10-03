@@ -1686,6 +1686,25 @@ def sanitize_tx_broadcast_response(server_msg) -> str:
     server_msg = str(server_msg)
     server_msg = server_msg.replace("\n", r"\n")
 
+    # Rincoin height-840,000 transition: reasons of Rincoin Community Core 1.2.0 for signatures
+    # made under the rules of the other side of the transition. Checked first, as the script
+    # error text could otherwise match a generic entry below.
+    if constants.net.SIGHASH_FORK_HEIGHT is not None:
+        fork_height = f"{constants.net.SIGHASH_FORK_HEIGHT:,}"
+        signed_before = _("The transaction was signed under the signature rules that applied before block {}, "
+                          "which the network no longer accepts. Sign the transaction again and send it.").format(fork_height)
+        signed_after = _("The transaction was signed under the signature rules that apply from block {}, "
+                         "which the network does not accept yet. Wait until that block has been mined, "
+                         "or sign the transaction again.").format(fork_height)
+        forkid_error_messages = {
+            r"old-style-sig-fork-id": signed_before,
+            r"Signature must use SIGHASH_FORKID": signed_before,
+            r"new-style-sig-fork-id": signed_after,
+        }
+        for substring, msg in forkid_error_messages.items():
+            if substring in server_msg:
+                return msg
+
     # https://github.com/bitcoin/bitcoin/blob/5bb64acd9d3ced6e6f95df282a1a0f8b98522cb0/src/script/script_error.cpp
     script_error_messages = {
         r"Script evaluated without error but finished with a false/empty top stack element",

@@ -415,7 +415,9 @@ class WCKeystoreType(WalletWizardComponent):
             ChoiceItem(key='createseed', label=_('Create a new seed')),
             ChoiceItem(key='haveseed', label=_('I already have a seed')),
             ChoiceItem(key='masterkey', label=_('Use a master key')),
-            ChoiceItem(key='hardware', label=_('Use a hardware device')),
+            # Rincoin: hardware wallets are disabled. No device supports the replay-protected signatures
+            # (SIGHASH_FORKID, fork ID 840) required from the height-840,000 transition.
+            # ChoiceItem(key='hardware', label=_('Use a hardware device')),
         ]
         self.choice_w = ChoiceWidget(message=message, choices=choices)
         self.layout().addWidget(self.choice_w)
@@ -432,7 +434,9 @@ class WCExtendKeystore(WalletWizardComponent):
         message = _('What type of signing method do you want to add?')
         choices = [
             ChoiceItem(key='haveseed', label=_('Enter seed')),
-            ChoiceItem(key='hardware', label=_('Use a hardware device')),
+            # Rincoin: hardware wallets are disabled. No device supports the replay-protected signatures
+            # (SIGHASH_FORKID, fork ID 840) required from the height-840,000 transition.
+            # ChoiceItem(key='hardware', label=_('Use a hardware device')),
         ]
         self.choice_w = ChoiceWidget(message=message, choices=choices)
         self.layout().addWidget(self.choice_w)
@@ -784,7 +788,9 @@ class WCCosignerKeystore(WalletWizardComponent):
         choices = [
             ChoiceItem(key='masterkey', label=_('Enter cosigner key')),
             ChoiceItem(key='haveseed', label=_('Enter cosigner seed')),
-            ChoiceItem(key='hardware', label=_('Cosign with hardware device')),
+            # Rincoin: hardware wallets are disabled. No device supports the replay-protected signatures
+            # (SIGHASH_FORKID, fork ID 840) required from the height-840,000 transition.
+            # ChoiceItem(key='hardware', label=_('Cosign with hardware device')),
         ]
 
         self.choice_w = ChoiceWidget(message=message, choices=choices)

@@ -87,6 +87,15 @@ class AbstractNet:
     XPRV_HEADERS_INV: Mapping[int, str]
     XPUB_HEADERS: Mapping[str, int]
     XPUB_HEADERS_INV: Mapping[int, str]
+    # Replay protection of the Rincoin height-840,000 transition. From the activation
+    # height every ECDSA signature has to carry SIGHASH_FORKID and the signature hash
+    # is the BIP143 digest (also for pre-SegWit inputs) with the fork ID in the upper
+    # bytes of the hash type. None on networks without such a rule.
+    SIGHASH_FORK_ID: Optional[int] = None
+    SIGHASH_FORK_HEIGHT: Optional[int] = None
+    # (height, block time) of a block known at release time. Lets a signer without a network
+    # connection bound the current height by the clock (see transaction.forkid_height_bounds).
+    FORKID_HEIGHT_REFERENCE: Optional[Tuple[int, int]] = None
 
     @classmethod
     def max_checkpoint(cls) -> int:
@@ -317,6 +326,12 @@ class RincoinMainnet(AbstractNet):
     # (Note: ticker "RIN" is also used by Ringo at coin type 205 — unrelated, do not confuse.)
     BIP44_COIN_TYPE = 9555
 
+    # Height-840,000 transition: fork ID 840 in every signature from block 840,000.
+    SIGHASH_FORK_ID = 840
+    SIGHASH_FORK_HEIGHT = 840_000
+    # block 750,000 (2026-09-22), the assumevalid block of Rincoin Community Core 1.2.0
+    FORKID_HEIGHT_REFERENCE = (750_000, 1_790_048_235)
+
     # PoW verification parameters (used by electrum/blockchain.py)
     MAX_TARGET = 0x0000ffff00000000000000000000000000000000000000000000000000000000  # compact: 0x1f00ffff
     # SPV wallets cannot independently compute the per-block DA target (DGW v3
@@ -369,6 +384,10 @@ class RincoinTestnet(AbstractNet):
     XPUB_HEADERS_INV = inv_dict(XPUB_HEADERS)
     BIP44_COIN_TYPE = 1             # shared testnet coin type (BIP-44 convention)
 
+    # Height-840,000 transition scaled to testnet: fork ID 840 from block 8,400.
+    SIGHASH_FORK_ID = 840
+    SIGHASH_FORK_HEIGHT = 8_400
+
     # Rincoin has no Lightning Network.
     HAS_LIGHTNING = False
     # PoW (TESTNET=True already bypasses PoW checks, but set consistently)
@@ -391,6 +410,49 @@ class RincoinRegtest(RincoinTestnet):
     GENESIS = "7d2c8c57ce2597f86c9fe41f9865ad664b04d2aad4321fdaab48ed3da1805fe7"
     DEFAULT_PORTS = {'t': '61001', 's': '61002'}
     LN_DNS_SEEDS = []
+
+    # Height-840,000 transition scaled to regtest: fork ID 840 from block 840.
+    SIGHASH_FORK_HEIGHT = 840
+
+
+class RincoinPreview(RincoinTestnet):
+    """Rincoin preview – the public rehearsal chain of the height-840,000 transition.
+
+    P2PKH "P...", P2SH "p...", bech32 "prin1...", native p2p port 49555, RPC 49556.
+    Extended keys: Core defines one pair, ppub/pprv, used here for the standard (p2pkh)
+    script type. Electrin needs one prefix per script type to tell them apart; the
+    other types keep the testnet SLIP-132 families (upub/Upub/vpub/Vpub), as regtest does.
+    """
+
+    NET_NAME = "rincoin-preview"
+    WIF_PREFIX = 0xb8               # 184 (Core chain parameters)
+    ADDRTYPE_P2PKH = 56             # produces "P..." legacy addresses
+    ADDRTYPE_P2SH = 118             # produces "p..." P2SH addresses
+    SEGWIT_HRP = "prin"
+    BOLT11_HRP = SEGWIT_HRP
+    GENESIS = "00004282aaa888c5b7a1bb210464788510d3c5976a8cec49061a3eb49d04ff33"
+    DEFAULT_PORTS = {'t': '62001', 's': '62002'}
+    LN_DNS_SEEDS = []
+
+    XPRV_HEADERS = {
+        'standard':    0x03e25946,  # pprv (Core chain parameters)
+        'p2wpkh-p2sh': 0x044a4e28,  # uprv
+        'p2wsh-p2sh':  0x024285b5,  # Uprv
+        'p2wpkh':      0x045f18bc,  # vprv
+        'p2wsh':       0x02575048,  # Vprv
+    }
+    XPRV_HEADERS_INV = inv_dict(XPRV_HEADERS)
+    XPUB_HEADERS = {
+        'standard':    0x03e25d80,  # ppub (Core chain parameters)
+        'p2wpkh-p2sh': 0x044a5262,  # upub
+        'p2wsh-p2sh':  0x024289ef,  # Upub
+        'p2wpkh':      0x045f1cf6,  # vpub
+        'p2wsh':       0x02575483,  # Vpub
+    }
+    XPUB_HEADERS_INV = inv_dict(XPUB_HEADERS)
+
+    # Height-840,000 transition scaled to preview: fork ID 840 from block 840.
+    SIGHASH_FORK_HEIGHT = 840
 
 # ---------------------------------------------------------------------------
 NETS_LIST = tuple(all_subclasses(AbstractNet))  # type: Sequence[Type[AbstractNet]]

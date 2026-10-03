@@ -9,6 +9,7 @@ from functools import partial
 from PyQt6.QtCore import pyqtProperty, pyqtSignal, pyqtSlot, QObject, QTimer
 
 from electrum.i18n import _
+from electrum import chain_milestones
 from electrum.invoices import InvoiceError, PR_PAID, PR_BROADCASTING, PR_BROADCAST
 from electrum.logging import get_logger
 from electrum.network import TxBroadcastError, BestEffortRequestFailed
@@ -32,6 +33,21 @@ from .util import QtEventListener, qt_event_listener
 if TYPE_CHECKING:
     from electrum.wallet import Abstract_Wallet
     from electrum.invoices import Invoice
+
+
+def _sign_auth_message(question: str):
+    """auth_protect message: the question, preceded by the explanation of a scheduled change
+    of the signature rules if the next block is close to one (see electrum/chain_milestones.py)."""
+    def message(self, tx, *args, **kwargs) -> str:
+        try:
+            notices = self.wallet.get_signing_notices(tx)
+        except Exception as e:
+            self._logger.error(f'{e!r}')
+            notices = []
+        if not notices:
+            return question
+        return '\n\n'.join([chain_milestones.notices_text(notices), question])
+    return message
 
 
 class QEWallet(AuthMixin, QObject, QtEventListener):
@@ -535,13 +551,13 @@ class QEWallet(AuthMixin, QObject, QtEventListener):
         self.isLightningChanged.emit()
         self.dataChanged.emit()
 
-    @auth_protect(message=_('Sign and send on-chain transaction?'))
+    @auth_protect(message=_sign_auth_message(_('Sign and send on-chain transaction?')))
     def sign_and_broadcast(self, tx, *,
                            on_success: Callable[[Transaction], None] = None,
                            on_failure: Callable[[Optional[Any]], None] = None) -> None:
         self.do_sign(tx, True, on_success, on_failure)
 
-    @auth_protect(message=_('Sign on-chain transaction?'))
+    @auth_protect(message=_sign_auth_message(_('Sign on-chain transaction?')))
     def sign(self, tx, *,
              on_success: Callable[[Transaction], None] = None,
              on_failure: Callable[[Optional[Any]], None] = None) -> None:
