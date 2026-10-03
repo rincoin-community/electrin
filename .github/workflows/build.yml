@@ -1,0 +1,203 @@
+# Build Electrin binaries, started by hand (Actions > Build > Run workflow).
+#
+# Each selected target is built in its own job with contrib/release_build.sh (the same
+# Docker-based builds as a local release build). A final job collects the files, writes
+# SHA256SUMS.txt and, when the signing secrets are set, signs it and writes the signed update
+# announcement version.json (served at https://electrin.net/version). With a release tag it
+# also creates a draft GitHub release; publishing the draft stays a manual step.
+#
+# Repository secrets (all optional; without them the corresponding signature is skipped):
+#   RELEASE_GPG_PRIVATE_KEY   ASCII-armored secret key that holds the release signing subkey,
+#                             e.g. gpg --armor --export-secret-subkeys 'ABB2DF8B79E8A4E761394732B3FF4116580342CB!'
+#   RELEASE_GPG_PASSPHRASE    its passphrase
+#   ANDROID_KEYSTORE_BASE64   base64 of the Android release keystore (alias "electrin")
+#   ANDROID_KEYSTORE_PASSWORD its password
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdist:
+        description: Source tarball
+        type: boolean
+        default: true
+      appimage:
+        description: Linux AppImage
+        type: boolean
+        default: true
+      windows:
+        description: Windows (setup, portable, standalone)
+        type: boolean
+        default: true
+      android:
+        description: Android APK (arm64-v8a)
+        type: boolean
+        default: true
+      release_tag:
+        description: Create a draft GitHub release with this tag (empty for none)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_SIGNING_KEY: ABB2DF8B79E8A4E761394732B3FF4116580342CB
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: sdist
+            skip: --skip-appimage --skip-windows --skip-android
+          - target: appimage
+            skip: --skip-sdist --skip-windows --skip-android
+          - target: windows
+            skip: --skip-sdist --skip-appimage --skip-android
+          - target: android
+            skip: --skip-sdist --skip-appimage --skip-windows
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Check whether this target was selected
+        id: selected
+        run: echo "run=${{ inputs[matrix.target] }}" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        if: steps.selected.outputs.run == 'true' && matrix.target == 'android'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h /
+
+      - name: Checkout
+        if: steps.selected.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Android release keystore
+        if: steps.selected.outputs.run == 'true' && matrix.target == 'android'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$HOME/.keystore"
+            echo "Android keystore installed; the APK will be signed."
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set; building an unsigned APK."
+          fi
+
+      - name: Build
+        if: steps.selected.outputs.run == 'true'
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          args=(--release --dist-clean=all ${{ matrix.skip }})
+          if [ "${{ matrix.target }}" = android ]; then
+            if [ -f "$HOME/.keystore" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ]; then
+              args+=("--android-password=$ANDROID_KEYSTORE_PASSWORD")
+            fi
+            # the Android build container runs as uid 1000 (fixed in contrib/android/Dockerfile),
+            # the runner as 1001: hand the tree to uid 1000 and drive the build as root
+            sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
+            sudo git config --global --add safe.directory '*'
+            sudo --preserve-env=HOME ./contrib/release_build.sh "${args[@]}"
+          else
+            ./contrib/release_build.sh "${args[@]}"
+          fi
+          ls -l dist/
+
+      - name: Upload
+        if: steps.selected.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: electrin-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.AppImage
+            dist/*.exe
+            dist/*.apk
+          if-no-files-found: error
+
+  checksums:
+    name: checksums, signatures, announcement
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download the built files
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: electrin-*
+          merge-multiple: true
+
+      - name: Checksums
+        id: sums
+        run: |
+          mkdir release
+          cp -a artifacts/. release/
+          cd release
+          [ -n "$(ls)" ] || { echo "::error::no built files"; exit 1; }
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          echo "version=$(python3 ../contrib/print_electrum_version.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Import the release signing key
+        id: gpg
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "::warning::RELEASE_GPG_PRIVATE_KEY is not set; SHA256SUMS.txt and version.json are not signed."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --list-secret-keys --keyid-format long
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Sign
+        if: steps.gpg.outputs.available == 'true'
+        env:
+          GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          pip install --quiet cryptography
+          cd release
+          gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 \
+              --local-user "${RELEASE_SIGNING_KEY}!" --detach-sign --armor \
+              -o SHA256SUMS.txt.asc SHA256SUMS.txt 3<<<"$GPG_PASSPHRASE"
+          gpg --batch --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+          ELECTRIN_RELEASE_KEY="$RELEASE_SIGNING_KEY" \
+              ../contrib/sign_version_announcement.sh "${{ steps.sums.outputs.version }}" > ../version.json
+          cat ../version.json
+
+      - name: Upload the release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: electrin-${{ steps.sums.outputs.version }}-release
+          path: |
+            release/
+            version.json
+          if-no-files-found: error
+
+      - name: Draft release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          VERSION: ${{ steps.sums.outputs.version }}
+        run: |
+          gh release create "$TAG" release/* --draft --prerelease \
+              --target "$GITHUB_SHA" --title "Electrin $VERSION" \
+              --notes "Electrin $VERSION. Verify downloads with SHA256SUMS.txt and SHA256SUMS.txt.asc (release key in SECURITY.md)."

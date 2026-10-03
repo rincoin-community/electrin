@@ -26,9 +26,13 @@ else
     signature="$(printf '%s' "$version" | gpg "${gpg_args[@]}")"
 fi
 
-# write the document, then check it with Electrin's own verifier
-PYTHONPATH="$root" python3 - "$version" "$signature" <<'PY'
-import json, sys
+# write the document, then check it with Electrin's own verifier (needs only the cryptography
+# package: the two modules are loaded without running electrum/__init__.py)
+ELECTRIN_ROOT="$root" python3 - "$version" "$signature" <<'PY'
+import json, os, sys, types
+package = types.ModuleType("electrum")
+package.__path__ = [os.path.join(os.environ["ELECTRIN_ROOT"], "electrum")]
+sys.modules["electrum"] = package
 from electrum.version_announcement import verify_announcement
 announcement = {"version": sys.argv[1], "openpgp_signature": sys.argv[2]}
 verify_announcement(announcement)
