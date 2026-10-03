@@ -115,7 +115,7 @@ class AbstractNet:
     _cached_default_servers = None
     @classproperty
     def DEFAULT_SERVERS(cls) -> Mapping[str, Mapping[str, str]]:
-        if cls._cached_default_servers is None:
+        if cls.__dict__.get('_cached_default_servers') is None:  # per class: subclasses must not inherit the cache
             default_file = {} if cls.TESTNET else None  # for mainnet we hard-fail if the file is missing.
             d = read_json(os.path.join('chains', cls.NET_NAME, 'servers.json'), default_file)
             # sanity check
@@ -128,7 +128,7 @@ class AbstractNet:
     _cached_fallback_lnnodes = None
     @classproperty
     def FALLBACK_LN_NODES(cls) -> Sequence[LNPeerAddr]:
-        if cls._cached_fallback_lnnodes is None:
+        if cls.__dict__.get('_cached_fallback_lnnodes') is None:  # per class: subclasses must not inherit the cache
             default_file = {} if cls.TESTNET else None  # for mainnet we hard-fail if the file is missing.
             d = read_json(os.path.join('chains', cls.NET_NAME, 'fallback_lnnodes.json'), default_file)
             cls._cached_fallback_lnnodes = create_fallback_node_list(d)
@@ -137,7 +137,7 @@ class AbstractNet:
     _cached_checkpoints = None
     @classproperty
     def CHECKPOINTS(cls) -> Sequence[Tuple[str, int]]:
-        if cls._cached_checkpoints is None:
+        if cls.__dict__.get('_cached_checkpoints') is None:  # per class: subclasses must not inherit the cache
             default_file = [] if cls.TESTNET else None  # for mainnet we hard-fail if the file is missing.
             cls._cached_checkpoints = read_json(os.path.join('chains', cls.NET_NAME, 'checkpoints.json'), default_file)
         return cls._cached_checkpoints

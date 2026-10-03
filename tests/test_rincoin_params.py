@@ -412,3 +412,12 @@ class TestRincoinCrossNetworkIsolation(RincoinNetworkBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestNetworkFileCaches(RincoinNetworkBase):
+    """servers.json, checkpoints.json and fallback_lnnodes.json are cached per network class;
+    a subclass (regtest, preview) must not inherit the cache of its parent class (testnet)."""
+
+    def test_caches_are_per_class(self):
+        self.assertTrue(constants.BitcoinTestnet.CHECKPOINTS)  # loads and caches testnet's
+        self.assertEqual([], list(constants.BitcoinRegtest.CHECKPOINTS))  # regtest has its own (none)
