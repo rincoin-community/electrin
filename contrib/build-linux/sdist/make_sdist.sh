@@ -55,16 +55,23 @@ info "preparing electrin-locale."
     else
         FINAL_DISTNAME="Electrin-$VERSION.tar.gz"
     fi
-    if ([ "$OMIT_UNCLEAN_FILES" = 1 ]); then
-        mv "$PY_DISTDIR/Electrin-$VERSION.tar.gz" "$PY_DISTDIR/../$FINAL_DISTNAME"
-        rmdir "$PY_DISTDIR"
-    fi
+    # setuptools names the tarball after the normalized version (1.0.0-beta.1 -> 1.0.0b1);
+    # the published name keeps ELECTRIN_VERSION
+    PY_TARBALL="$(ls "$PY_DISTDIR"/Electrin-*.tar.gz)"
+    PY_NAME="$(basename "$PY_TARBALL" .tar.gz)"
 
     # the initial tar.gz is not reproducible, see https://github.com/pypa/setuptools/issues/2133
     # so we untar, fix timestamps, and then re-tar
     mkdir -p "$BUILDDIR/dist2"
     cd "$BUILDDIR/dist2"
-    tar -xzf "$BUILDDIR/dist1/$FINAL_DISTNAME"
+    tar -xzf "$PY_TARBALL"
+    if [ "$PY_NAME" != "Electrin-$VERSION" ]; then
+        mv "$PY_NAME" "Electrin-$VERSION"
+    fi
+    rm -f "$PY_TARBALL"
+    if ([ "$OMIT_UNCLEAN_FILES" = 1 ]); then
+        rmdir "$PY_DISTDIR"
+    fi
     find -exec touch -h -d '2000-11-11T11:11:11+00:00' {} +
     GZIP=-n tar --sort=name -czf "$FINAL_DISTNAME" "Electrin-$VERSION/"
     mv "$FINAL_DISTNAME" "$DISTDIR/$FINAL_DISTNAME"

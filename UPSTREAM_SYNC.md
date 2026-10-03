@@ -306,6 +306,12 @@ git merge -s ours a94e460b5   # records b9be9749..a94e460b5 (pass #2) as reviewe
 Everything remaining after this point is bucket 4 (needs a dedicated decision, not routine sync work) or
 bucket 5 (permanently skipped) — the counter reflects that going forward, not raw upstream activity.
 
+## Single picks outside a sync pass
+
+| Date | Upstream commit | Why |
+|---|---|---|
+| 2026-10-03 | `fd6879401` contrib: build appimage: fetch ca-certificates from pinned sources | the AppImage build broke because the default Debian 11 sources stopped working (first CI build) |
+
 ---
 
 ## Reference
