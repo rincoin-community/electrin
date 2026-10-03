@@ -55,6 +55,12 @@ def get_android_versioncode(*, arch_name: str) -> int:
     # This offset ensures that all new-scheme version codes are larger than the old-scheme version codes.
     offset_due_to_legacy_scheme = 45_000_000
     version_code += offset_due_to_legacy_scheme
+    # Electrin: until 4.7.1rc1, Electrin APKs carried the inherited Electrum version number
+    # (version code 45_407_013 for 4.7.1 on arm64-v8a). Electrin's own numbering restarts at 1.0.0,
+    # whose plain code (45_100_003) would be lower, and Android refuses to install a lower version
+    # code over an installed app. This offset keeps every Electrin version above the 4.x codes.
+    offset_due_to_electrin_version_restart = 1_000_000
+    version_code += offset_due_to_electrin_version_restart
     return version_code
 
 
