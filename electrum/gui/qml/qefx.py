@@ -95,6 +95,10 @@ class QEFX(QObject, QtEventListener):
             self.fx.set_exchange(source)
             self.rateSourceChanged.emit()
 
+    @pyqtProperty(bool, constant=True)
+    def available(self):
+        return self.fx.is_available()
+
     enabledUpdated = pyqtSignal()  # curiously, enabledChanged is clashing, so name it enabledUpdated
     @pyqtProperty(bool, notify=enabledUpdated)
     def enabled(self):

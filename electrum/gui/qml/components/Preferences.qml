@@ -111,6 +111,7 @@ Pane {
                     }
 
                     RowLayout {
+                        visible: Daemon.fx.available
                         spacing: 0
                         Switch {
                             id: fiatEnable
@@ -128,6 +129,7 @@ Pane {
 
                     ElComboBox {
                         id: currencies
+                        visible: Daemon.fx.available
                         model: Daemon.fx.currencies
                         enabled: Daemon.fx.enabled
                         onCurrentValueChanged: {
@@ -140,6 +142,7 @@ Pane {
                         Layout.columnSpan: 2
                         Layout.fillWidth: true
                         spacing: 0
+                        visible: Daemon.fx.available
                         Switch {
                             id: historicRates
                             enabled: Daemon.fx.enabled
@@ -157,11 +160,13 @@ Pane {
 
                     Label {
                         text: qsTr('Exchange rate provider')
+                        visible: Daemon.fx.available
                         enabled: Daemon.fx.enabled
                     }
 
                     ElComboBox {
                         id: rateSources
+                        visible: Daemon.fx.available
                         enabled: Daemon.fx.enabled
                         model: Daemon.fx.rateSources
                         onModelChanged: {

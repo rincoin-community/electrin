@@ -76,6 +76,8 @@ class AbstractNet:
     # When False, wallet.can_have_lightning() returns False unconditionally,
     # hiding all LN UI and preventing channel creation.
     HAS_LIGHTNING: bool = True
+    # Whether fiat exchange rates can be shown. The inherited providers quote Bitcoin.
+    HAS_FX_RATES: bool = True
     # Each subclass must set BIP44_COIN_TYPE to its SLIP-0044 registered coin
     # type. Rincoin is registered as 9555:
     # https://github.com/satoshilabs/slips/blob/master/slip-0044.md
@@ -301,6 +303,8 @@ class RincoinMainnet(AbstractNet):
     BLOCK_HEIGHT_FIRST_LIGHTNING_CHANNELS = 0
     # Rincoin has no Lightning Network — disable all LN functionality in the wallet.
     HAS_LIGHTNING = False
+    # Rincoin: fiat rates are disabled; the inherited exchange-rate providers quote Bitcoin.
+    HAS_FX_RATES = False
 
     # Rincoin Core reuses standard BTC xpub/xprv serialisation bytes so that
     # hardware wallets derive keys correctly.  The coin type in the BIP-44
@@ -390,6 +394,8 @@ class RincoinTestnet(AbstractNet):
 
     # Rincoin has no Lightning Network.
     HAS_LIGHTNING = False
+    # Rincoin: fiat rates are disabled; the inherited exchange-rate providers quote Bitcoin.
+    HAS_FX_RATES = False
     # PoW (TESTNET=True already bypasses PoW checks, but set consistently)
     MAX_TARGET = 0x0000ffff00000000000000000000000000000000000000000000000000000000
     SPV_SKIP_DA_BITS_CHECK = True

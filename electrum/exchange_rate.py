@@ -14,6 +14,7 @@ from aiorpcx.curio import timeout_after, ignore_after
 import aiohttp
 
 from . import util
+from . import constants
 from .bitcoin import COIN
 from .i18n import _
 from .util import (
@@ -766,10 +767,16 @@ class FxThread(ThreadJob, EventListener, NetworkRetryManager[str]):
                 # refresh spot price
                 await self.exchange.update_safe(self.ccy)
 
+    def is_available(self) -> bool:
+        """Whether fiat rates exist for this network at all (see AbstractNet.HAS_FX_RATES)."""
+        return constants.net.HAS_FX_RATES
+
     def is_enabled(self) -> bool:
-        return self.config.FX_USE_EXCHANGE_RATE
+        return self.is_available() and self.config.FX_USE_EXCHANGE_RATE
 
     def set_enabled(self, b: bool) -> None:
+        if not self.is_available():
+            return
         self.config.FX_USE_EXCHANGE_RATE = b
         self.trigger_update()
 

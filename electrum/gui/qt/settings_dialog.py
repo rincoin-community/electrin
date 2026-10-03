@@ -407,7 +407,7 @@ class SettingsDialog(QDialog, QtEventListener):
         tabs_info = [
             (gui_widgets, _('Appearance')),
             (units_widgets, _('Units')),
-            (fiat_widgets, _('Fiat')),
+            *([(fiat_widgets, _('Fiat'))] if self.fx and self.fx.is_available() else []),
             (lightning_widgets, _('Lightning')),
             (misc_widgets, _('Misc')),
         ]
