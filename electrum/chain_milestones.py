@@ -126,6 +126,9 @@ def signing_notices(
     """
     if milestones is None:
         milestones = MILESTONES
+    milestones = [m for m in milestones if m.height() is not None]
+    if not milestones:
+        return []
     if tip_height is None:
         tip_height = synced_tip_height()
     if tip_height is not None:
@@ -139,8 +142,6 @@ def signing_notices(
     notices = []
     for milestone in milestones:
         activation_height = milestone.height()
-        if activation_height is None:
-            continue
         start, end = _window(milestone, activation_height)
         if next_lo < end and next_hi >= start:
             notices.append(MilestoneNotice(
