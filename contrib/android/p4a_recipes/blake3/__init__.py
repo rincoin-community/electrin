@@ -42,6 +42,10 @@ class Blake3Recipe(PythonRecipe):
         # only adds -lpython when call_hostpython_via_targetpython is False,
         # but blake3 uses a custom build_arch so we add it here explicitly.
         python_recipe = self.ctx.python_recipe
+        # blake3 0.4.1's C module declares its METH_VARARGS|METH_KEYWORDS functions with three
+        # parameters in PyMethodDef (the usual CPython idiom, without a cast); the clang of
+        # NDK r28 treats that as an error (default since clang 16). Keep it a warning.
+        env['CFLAGS'] = env.get('CFLAGS', '') + ' -Wno-error=incompatible-function-pointer-types'
         env['LDFLAGS'] += ' -L{} -lpython{}'.format(
             python_recipe.link_root(arch.arch),
             python_recipe.link_version,
