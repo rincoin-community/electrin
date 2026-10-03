@@ -311,6 +311,8 @@ bucket 5 (permanently skipped) — the counter reflects that going forward, not 
 | Date | Upstream commit | Why |
 |---|---|---|
 | 2026-10-03 | `fd6879401` contrib: build appimage: fetch ca-certificates from pinned sources | the AppImage build broke because the default Debian 11 sources stopped working (first CI build) |
+| 2026-10-03 | `e3c0fa838` contrib: appimage: respect ELECBUILD_NOCACHE during runtime build | prerequisite of the next pick (same patch file) |
+| 2026-10-03 | `ca8be6bb2` contrib: appimage: bump type2-runtime build env packages | the pinned Alpine packages of the type2-runtime build were no longer available |
 
 ---
 
