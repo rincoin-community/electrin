@@ -104,6 +104,8 @@ jobs:
             fi
             # the Android build container runs as uid 1000 (fixed in contrib/android/Dockerfile),
             # the runner as 1001: hand the tree to uid 1000 and drive the build as root
+            # the gradle cache is mounted into the container; create it before docker would (as root)
+            mkdir -p "$GITHUB_WORKSPACE/.buildozer_qml/.gradle"
             sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
             sudo git config --global --add safe.directory '*'
             sudo --preserve-env=HOME ./contrib/release_build.sh "${args[@]}"

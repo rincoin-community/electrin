@@ -21,7 +21,7 @@ if __name__ == '__main__':
     else:
         attr_name = "ELECTRIN_VERSION"
 
-    project_root = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     version_file_path = os.path.join(project_root, "electrum", "version.py")
 
     # load version.py; needlessly complicated alternative to "imp.load_source":
