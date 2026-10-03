@@ -343,7 +343,7 @@ class RincoinTestnet(AbstractNet):
 
     NET_NAME = "rincoin-testnet"
     TESTNET = True
-    WIF_PREFIX = 0xd1               # 209 – testnet WIF prefix
+    WIF_PREFIX = 0xc1               # 193 – testnet WIF prefix (Core chain parameters)
     ADDRTYPE_P2PKH = 65             # produces "T..." legacy addresses
     ADDRTYPE_P2SH = 127             # produces "t..." P2SH addresses
     SEGWIT_HRP = "trin"
@@ -383,6 +383,7 @@ class RincoinRegtest(RincoinTestnet):
     """Rincoin regtest – bech32 "rrin1...", native p2p port 29555."""
 
     NET_NAME = "rincoin-regtest"
+    WIF_PREFIX = 0xef               # 239 – same as BTC regtest (Core chain parameters)
     ADDRTYPE_P2PKH = 111            # same as BTC testnet / regtest
     ADDRTYPE_P2SH = 196
     SEGWIT_HRP = "rrin"

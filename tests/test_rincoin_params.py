@@ -135,7 +135,7 @@ class TestRincoinNetworkConstants(RincoinNetworkBase):
     def test_testnet_constants(self):
         self.assertEqual(constants.RincoinTestnet.ADDRTYPE_P2PKH, 65)
         self.assertEqual(constants.RincoinTestnet.ADDRTYPE_P2SH, 127)
-        self.assertEqual(constants.RincoinTestnet.WIF_PREFIX, 0xd1)
+        self.assertEqual(constants.RincoinTestnet.WIF_PREFIX, 0xc1)  # 193, Core chain parameters
         self.assertEqual(constants.RincoinTestnet.SEGWIT_HRP, 'trin')
         self.assertEqual(
             constants.RincoinTestnet.GENESIS,
