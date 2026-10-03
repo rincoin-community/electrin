@@ -13,7 +13,8 @@ set -e
 
 pushd "$PROJECT_ROOT"
 
-VERSION=$(git describe --tags --dirty --always)
+# Electrin: name the binaries after ELECTRIN_VERSION (git describe would pick up upstream Electrum tags)
+VERSION=$("$CONTRIB"/print_electrum_version.py)
 info "Last commit: $VERSION"
 
 info "preparing electrin-locale."
