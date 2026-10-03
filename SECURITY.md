@@ -22,6 +22,19 @@ To report security issues, send an email to the address listed below.
 |-----------|--------------------------------|---------------------------------------------------|
 | Takologi  | takologi [AT] proton [DOT] me  | 588F 056A 90C0 D941 274F 6662 24DC 647F 06EE F1D9 |
 
+### Release signing key
+
+Releases and the in-app version announcement are signed with the OpenPGP key of
+Rincoin Community Forge (the same key that signs Rincoin Community Core releases):
+
+| Key | Fingerprint |
+|-----|-------------|
+| Rincoin Community Security <security@rincoin.tech> (primary) | FEE1 ACA5 2C65 FF3E BF31  818C B559 5E17 52BC 2A82 |
+| signing subkey (ed25519) | ABB2 DF8B 79E8 A4E7 6139  4732 B3FF 4116 5803 42CB |
+
+The public key is in `pubkeys/rincoin-community-security.asc`. Verify a download with
+`gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt` and `sha256sum --check --ignore-missing SHA256SUMS.txt`.
+
 ### Upstream Electrum contacts (original project)
 
 Electrin is forked from [Electrum](https://github.com/spesmilo/electrum).
@@ -96,63 +109,25 @@ gpg --armor --export-secret-keys "takologi@proton.me" > electrin-signing-key.pri
 Store the backup on an encrypted USB drive or hardware security module.
 **Never** commit private keys to the repository.
 
-### Step 5 — Generate a Rincoin-address signing key (for the in-app update checker)
+### Step 5 — Sign the version announcement (for the in-app update checker)
 
-> **This is NOT a replacement for GPG.**  GPG and Rincoin-address signing
-> serve completely different purposes:
->
-> | Mechanism | Used for | Verified by |
-> |-----------|----------|-------------|
-> | **GPG** (Steps 1–4) | Signing release tarballs, git tags, email | Users run `gpg --verify` manually |
-> | **Rincoin address** (this step) | Signing version-announcement JSON for the **in-app update checker** | Electrin verifies automatically, in code |
->
-> You need **both** for a full release signing workflow.
-
-The in-app update checker (`electrum/gui/qt/update_checker.py`) does NOT
-use GPG.  Instead, it fetches a JSON document from the update server:
+The in-app update checker fetches a JSON document from `https://electrin.net/version`:
 
 ```json
 {
-    "version": "4.8.0",
-    "signatures": {
-        "Rxxxxxxxxxxxxxxxxxxxxxxxxx": "base64-encoded-signature"
-    }
+    "version": "1.0.0",
+    "openpgp_signature": "-----BEGIN PGP SIGNATURE----- ..."
 }
 ```
 
-The client verifies the signature using Rincoin's `verifymessage` protocol
-(ECDSA sign/verify on the message string, e.g. `"4.8.0"`).  The addresses
-it trusts are hardcoded in `VERSION_ANNOUNCEMENT_SIGNING_KEYS` in
-`update_checker.py`.
+The signature is a detached OpenPGP signature over the version string (no trailing newline) by
+the release signing subkey. Electrin pins that key in `electrum/version_announcement.py`
+(`RELEASE_KEYS`, the public-key packet and its fingerprint) and verifies the signature itself
+(`electrum/openpgp.py`), without a key ring or key server. When releasing a new version:
 
-**How to create this key:**
+```bash
+contrib/sign_version_announcement.sh 1.0.0 > version.json
+```
 
-1. **Generate a Rincoin P2PKH address and its private key (WIF).**
-   You can use Electrin itself, or any tool that produces Rincoin keys:
-   ```bash
-   # Using Electrin (once it works reliably):
-   electrin create -w /tmp/update-signer
-   electrin listaddresses -w /tmp/update-signer   # pick an address
-   electrin getprivatekeys <address> -w /tmp/update-signer
-   ```
-
-2. **Record the address** (starts with `R`).
-
-3. **Store the WIF private key offline and encrypted.**
-   This key will be used to sign each version announcement string before
-   publishing it on the update server.  Treat it like a GPG private key.
-
-4. **Add the address to the source code:**
-   Edit `electrum/gui/qt/update_checker.py` and add your address to the
-   `VERSION_ANNOUNCEMENT_SIGNING_KEYS` tuple (replacing the upstream
-   Electrum/Bitcoin addresses that are currently there as placeholders).
-
-5. **When releasing a new version**, sign the version string with the
-   WIF key and publish the resulting JSON on the update endpoint:
-   ```bash
-   # Sign the version string "4.8.0" with the Rincoin address:
-   electrin signmessage <address> "4.8.0" -w /path/to/signer-wallet
-   # This outputs a base64 signature → put it in the JSON served by the update server.
-   ```
-
-6. **Securely destroy** `/tmp/update-signer` after extracting the key.
+and publish `version.json` as `src/content/version.json` of the electrin-web repository. A new
+signing key must be added to `RELEASE_KEYS` in a release before announcements are signed with it.

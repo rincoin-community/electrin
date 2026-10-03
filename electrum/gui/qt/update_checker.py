@@ -2,59 +2,30 @@
 # Distributed under the MIT software license, see the accompanying
 # file LICENCE or http://www.opensource.org/licenses/mit-license.php
 #
-# ──────────────────────────────────────────────────────────────────────
-# TODO [SECURITY] — Update checker is DISABLED during the testing phase.
-#
-# The upstream Electrum update checker fetches version info from
-# electrum.org and validates it against Bitcoin-mainnet signing keys.
-# Neither the URL nor the signing keys are applicable to Electrin.
-#
-# Before leaving the testing phase:
-#   1. Deploy a version-announcement endpoint on electrin.net (or the
-#      Electrin GitHub Releases API).
-#   2. Generate Rincoin-mainnet signing keys for version announcements
-#      (see SECURITY.md for the key-generation procedure).
-#   3. Replace `url`, `download_url`, and
-#      `VERSION_ANNOUNCEMENT_SIGNING_KEYS` below with the new values.
-#   4. Re-enable the update checker in this file and in main_window.py.
-#   5. Remove the DISABLED guard from `UpdateCheckThread.run()`.
-#
-# Until these steps are completed the update check will always report
-# "disabled" so that no data is sent to third-party servers.
-# ──────────────────────────────────────────────────────────────────────
+# The latest release is announced at electrin.net, signed with the OpenPGP release key
+# (see electrum/version_announcement.py). The automatic check stays off until it is
+# enabled in this file (_UPDATE_CHECK_DISABLED) and the announcement is published signed.
 
 import asyncio
-import base64
-import re
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import QVBoxLayout, QLabel, QProgressBar, QHBoxLayout, QPushButton, QDialog
 
 from electrum import version
-from electrum import constants
-from electrum.bitcoin import verify_usermessage_with_address
+from electrum import version_announcement
 from electrum.i18n import _
 from electrum.util import make_aiohttp_session
 from electrum.logging import Logger
 from electrum.network import Network
-from electrum._vendor.distutils.version import StrictVersion
 
-# TODO [SECURITY] — Replace with Electrin's own URLs and signing keys
-#                    before production release.
-_UPDATE_CHECK_DISABLED = True  # flip to False once Electrin infrastructure is ready
+# flip to False once electrin.net serves the signed announcement (UPDATE-CHECK in README.md)
+_UPDATE_CHECK_DISABLED = True
 
 
 class UpdateCheck(QDialog, Logger):
-    url = "https://electrum.org/version"              # TODO: change to electrin.net endpoint
-    download_url = "https://electrum.org/#download"    # TODO: change to electrin.net download page
-
-    VERSION_ANNOUNCEMENT_SIGNING_KEYS = (
-        # TODO [SECURITY] — These are upstream Electrum Bitcoin-mainnet keys.
-        #   Replace with Electrin/Rincoin keys before enabling update checks.
-        "13xjmVAB1EATPP8RshTE8S8sNwwSUM9p1P",  # ThomasV (since 3.3.4)  — UPSTREAM, NOT OURS
-        "1Nxgk6NTooV4qZsX5fdqQwrLjYcsQZAfTg",  # ghost43 (since 4.1.2)  — UPSTREAM, NOT OURS
-    )
+    url = version_announcement.ANNOUNCEMENT_URL
+    download_url = version_announcement.DOWNLOAD_URL
 
     def __init__(self, *, latest_version=None):
         QDialog.__init__(self)
@@ -94,7 +65,7 @@ class UpdateCheck(QDialog, Logger):
             self.detail_label.setText(
                 _("Automatic update checking is disabled during the testing phase.") + "<br><br>" +
                 _("Please check for updates manually at") + " " +
-                "<a href='https://github.com/takologi/electrin/releases'>GitHub Releases</a>."
+                "<a href='{u}'>GitHub Releases</a>.".format(u=UpdateCheck.download_url)
             )
 
         close_button = QPushButton(_("Close"))
@@ -112,13 +83,8 @@ class UpdateCheck(QDialog, Logger):
         self.pb.hide()
 
     @staticmethod
-    def is_newer(latest_version):
-        # StrictVersion only accepts 'X.Y.Z' or 'X.Y.Z[ab]N' forms, so
-        # ELECTRIN_VERSION's '-beta.N'/'-rc.N' suffixes (e.g. '1.0.0-beta.1')
-        # need normalizing to that form (e.g. '1.0.0b1') for comparison.
-        local = re.sub(r'-beta\.?(\d+)$', r'b\1', version.ELECTRIN_VERSION)
-        local = re.sub(r'-rc\.?(\d+)$', r'c\1', local)
-        return latest_version > StrictVersion(local)
+    def is_newer(latest_version) -> bool:
+        return version_announcement.is_newer(str(latest_version), version.ELECTRIN_VERSION)
 
     def update_view(self, latest_version=None):
         if latest_version:
@@ -151,30 +117,10 @@ class UpdateCheckThread(QThread, Logger):
         #       and it's bad not to get an update notification just because we did not wait enough.
         async with make_aiohttp_session(proxy=self.network.proxy, timeout=120) as session:
             async with session.get(UpdateCheck.url) as result:
-                signed_version_dict = await result.json(content_type=None)
-                # example signed_version_dict:
-                # {
-                #     "version": "3.9.9",
-                #     "signatures": {
-                #         "1Lqm1HphuhxKZQEawzPse8gJtgjm9kUKT4": "IA+2QG3xPRn4HAIFdpu9eeaCYC7S5wS/sDxn54LJx6BdUTBpse3ibtfq8C43M7M1VfpGkD5tsdwl5C6IfpZD/gQ="
-                #     }
-                # }
-                version_num = signed_version_dict['version']
-                sigs = signed_version_dict['signatures']
-                for address, sig in sigs.items():
-                    if address not in UpdateCheck.VERSION_ANNOUNCEMENT_SIGNING_KEYS:
-                        continue
-                    sig = base64.b64decode(sig, validate=True)
-                    msg = version_num.encode('utf-8')
-                    if verify_usermessage_with_address(
-                        address=address, sig65=sig, message=msg,
-                        net=constants.BitcoinMainnet
-                    ):
-                        self.logger.info(f"valid sig for version announcement '{version_num}' from address '{address}'")
-                        break
-                else:
-                    raise Exception('no valid signature for version announcement')
-                return StrictVersion(version_num.strip())
+                announcement = await result.json(content_type=None)
+                version_num = version_announcement.verify_announcement(announcement)
+                self.logger.info(f"valid signature for version announcement {version_num!r}")
+                return version_num
 
     def run(self):
         # TODO [SECURITY] — Update checker disabled during testing phase.
