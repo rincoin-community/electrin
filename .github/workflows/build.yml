@@ -104,11 +104,15 @@ jobs:
             fi
             # the Android build container runs as uid 1000 (fixed in contrib/android/Dockerfile),
             # the runner as 1001: hand the tree to uid 1000 and drive the build as root
-            # the gradle cache is mounted into the container; create it before docker would (as root)
-            mkdir -p "$GITHUB_WORKSPACE/.buildozer_qml/.gradle"
+            # directories the container writes to must exist before the root-run build would
+            # create them: the mounted gradle cache, and dist/ (kept, as the checkout is fresh)
+            mkdir -p "$GITHUB_WORKSPACE/.buildozer_qml/.gradle" "$GITHUB_WORKSPACE/dist"
+            args=("${args[@]/--dist-clean=all/--dist-clean=none}")
             sudo chown -R 1000:1000 "$GITHUB_WORKSPACE"
             sudo git config --global --add safe.directory '*'
             sudo --preserve-env=HOME ./contrib/release_build.sh "${args[@]}"
+            # buildozer also leaves its own copy of the APK in dist/; keep the renamed one only
+            sudo find dist -name '*.apk' ! -name 'electrin-*-android-*.apk' -delete
           else
             ./contrib/release_build.sh "${args[@]}"
           fi
