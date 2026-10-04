@@ -243,7 +243,7 @@ Each item references the source file(s) where the matching code comment lives.
 
 | Tag | Summary | Files |
 |-----|---------|-------|
-| `CHECKPOINTS` | Generate checkpoints.json from Rincoin Core RPC (`python3 contrib/generate_checkpoints.py`). Without checkpoints, a malicious server can serve a fabricated header chain. | `electrum/constants.py`, `contrib/generate_checkpoints.py` |
+| `CHECKPOINTS` | Mainnet checkpoints end at block 749,951. Regenerate them for later releases (`contrib/generate_checkpoints.py`, check with `contrib/verify_checkpoints.py`); after the height-840,000 transition a release with checkpoints beyond it also pins the transition's chain. | `electrum/chains/rincoin/checkpoints.json`, `contrib/generate_checkpoints.py` |
 | `SEED-PREFIX` | Decide whether to adopt unique seed prefixes before stable release to prevent cross-chain seed confusion with Electrum. | `electrum/version.py` |
 
 ### Branding

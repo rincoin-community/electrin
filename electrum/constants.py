@@ -345,13 +345,10 @@ class RincoinMainnet(AbstractNet):
     # correct SPV security model and is immune to future DA algorithm changes.
     SPV_SKIP_DA_BITS_CHECK = True
 
-    # TODO [SECURITY] — Checkpoints are currently EMPTY. Generate them with:
-    #   python3 contrib/generate_checkpoints.py \
-    #       --rpc-url http://user:pass@127.0.0.1:9555 \
-    #       --output electrum/chains/rincoin/checkpoints.json
-    # Without checkpoints, an attacker who controls the Electrum server can
-    # serve a fabricated header chain. Checkpoints pin the first N blocks
-    # and prevent header-chain replacement within that range.
+    # Checkpoints (electrum/chains/rincoin/checkpoints.json) pin the chain up to block 749,951 and
+    # prevent header-chain replacement within that range; headers below it are fetched only on
+    # demand. Regenerate for a release with contrib/generate_checkpoints.py (never at or above
+    # the height-840,000 transition) and check with contrib/verify_checkpoints.py.
 
     LN_REALM_BYTE = 0
     LN_DNS_SEEDS = []

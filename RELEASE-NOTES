@@ -12,6 +12,8 @@
    hardware wallets can still be opened; they cannot sign from block 840,000. Move the coins to a
    software wallet before that block, or restore the device's recovery seed as a software wallet.
  * Default servers: peer1.rincoin.tech, peer2.rincoin.tech, peer3.rincoin.tech.
+ * Mainnet checkpoints up to block 749,951: a new wallet no longer downloads and verifies all
+   older headers, and the chain up to that block cannot be replaced by a server.
  * Fiat exchange rates are disabled (the inherited providers quoted the Bitcoin price).
  * Update check: the announcement now comes from electrin.net and is verified against the
    pinned OpenPGP release key (Electrin 4.7.1rc1 asked electrum.org and reported Electrum
