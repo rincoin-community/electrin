@@ -59,7 +59,7 @@ source.exclude_patterns = Makefile,setup*,
     packages/frozenlist-*.dist-info/*
 
 # (str) Application versioning (method 1)
-version.regex = ELECTRIN_VERSION = '(.*)'
+version.regex = ELECTRIN_VERSION = '([^']*)'
 version.filename = %(source.dir)s/electrum/version.py
 
 # (str) Application versioning (method 2)
