@@ -7,9 +7,10 @@
 # also creates a draft GitHub release; publishing the draft stays a manual step.
 #
 # Repository secrets (all optional; without them the corresponding signature is skipped):
-#   RELEASE_GPG_PRIVATE_KEY   ASCII-armored secret key that holds the release signing subkey,
-#                             e.g. gpg --armor --export-secret-subkeys 'ABB2DF8B79E8A4E761394732B3FF4116580342CB!'
-#   RELEASE_GPG_PASSPHRASE    its passphrase
+#   GPG_PRIVATE_KEY           secret key that holds the release signing subkey, armored or base64
+#                             (the same secret as in the KDF Reloaded release workflow), e.g.
+#                             gpg --armor --export-secret-subkeys 'ABB2DF8B79E8A4E761394732B3FF4116580342CB!'
+#   GPG_PASSPHRASE            its passphrase, only if the exported subkey has one
 #   ANDROID_KEYSTORE_BASE64   base64 of the Android release keystore (alias "electrin")
 #   ANDROID_KEYSTORE_PASSWORD its password
 name: Build
@@ -80,6 +81,17 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      # Qt for the build machine (hostqt6) takes about an hour to compile from source. Its install
+      # directory (~130 MB) is cached; python-for-android skips the recipe when install/bin/qmake
+      # exists. The key covers the build image (NDK, python-for-android) and the Qt recipes.
+      - name: Restore the host Qt build
+        id: hostqt6
+        if: steps.selected.outputs.run == 'true' && matrix.target == 'android'
+        uses: actions/cache/restore@v4
+        with:
+          path: .buildozer_qml/android/platform/build-arm64-v8a/build/other_builds/hostqt6/install
+          key: android-hostqt6-${{ hashFiles('contrib/android/Dockerfile', 'contrib/android/p4a_recipes/qt6/**') }}
+
       - name: Android release keystore
         if: steps.selected.outputs.run == 'true' && matrix.target == 'android'
         env:
@@ -117,6 +129,23 @@ jobs:
             ./contrib/release_build.sh "${args[@]}"
           fi
           ls -l dist/
+
+      - name: Save the host Qt build
+        if: >-
+          always() && steps.selected.outputs.run == 'true' && matrix.target == 'android'
+          && steps.hostqt6.outputs.cache-hit != 'true'
+          && hashFiles('.buildozer_qml/android/platform/build-arm64-v8a/build/other_builds/hostqt6/install/bin/qmake') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .buildozer_qml/android/platform/build-arm64-v8a/build/other_builds/hostqt6/install
+          key: ${{ steps.hostqt6.outputs.cache-primary-key }}
+
+      - name: Sizes of the Android build tree (for further caching)
+        if: always() && steps.selected.outputs.run == 'true' && matrix.target == 'android'
+        run: |
+          b=.buildozer_qml/android/platform/build-arm64-v8a
+          sudo du -sh "$b"/* "$b"/build/* "$b"/build/other_builds/* 2>/dev/null | sort -h | tail -25 || true
+          sudo du -sh "$b"/build/other_builds/qt6/*/* "$b"/build/libs_collections/* 2>/dev/null | sort -h | tail -15 || true
 
       - name: Upload
         if: steps.selected.outputs.run == 'true'
@@ -162,27 +191,38 @@ jobs:
       - name: Import the release signing key
         id: gpg
         env:
-          GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
           if [ -z "$GPG_PRIVATE_KEY" ]; then
-            echo "::warning::RELEASE_GPG_PRIVATE_KEY is not set; SHA256SUMS.txt and version.json are not signed."
+            echo "::warning::GPG_PRIVATE_KEY is not set; SHA256SUMS.txt and version.json are not signed."
             echo "available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          # accept the secret armored or base64-encoded (as the KDF Reloaded release workflow does)
+          printf '%s' "$GPG_PRIVATE_KEY" > "$RUNNER_TEMP/gpgkey.in"
+          if base64 -d "$RUNNER_TEMP/gpgkey.in" 2>/dev/null | grep -q 'PGP PRIVATE KEY'; then
+            base64 -d "$RUNNER_TEMP/gpgkey.in" | gpg --batch --import
+          else
+            gpg --batch --import "$RUNNER_TEMP/gpgkey.in"
+          fi
+          shred -u "$RUNNER_TEMP/gpgkey.in"
           gpg --batch --list-secret-keys --keyid-format long
           echo "available=true" >> "$GITHUB_OUTPUT"
 
       - name: Sign
         if: steps.gpg.outputs.available == 'true'
         env:
-          GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           pip install --quiet cryptography
           cd release
-          gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 \
-              --local-user "${RELEASE_SIGNING_KEY}!" --detach-sign --armor \
-              -o SHA256SUMS.txt.asc SHA256SUMS.txt 3<<<"$GPG_PASSPHRASE"
+          sign=(gpg --batch --yes --local-user "${RELEASE_SIGNING_KEY}!" --detach-sign --armor)
+          if [ -n "$GPG_PASSPHRASE" ]; then
+            "${sign[@]}" --pinentry-mode loopback --passphrase-fd 3 \
+                -o SHA256SUMS.txt.asc SHA256SUMS.txt 3<<<"$GPG_PASSPHRASE"
+          else
+            "${sign[@]}" -o SHA256SUMS.txt.asc SHA256SUMS.txt
+          fi
           gpg --batch --verify SHA256SUMS.txt.asc SHA256SUMS.txt
           ELECTRIN_RELEASE_KEY="$RELEASE_SIGNING_KEY" \
               ../contrib/sign_version_announcement.sh "${{ steps.sums.outputs.version }}" > ../version.json
